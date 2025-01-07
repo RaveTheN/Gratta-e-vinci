@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.2",
+    "jimp": "^1.6.0",
+    "screenshot-desktop": "^1.15.0",
+    "tesseract.js": "^5.1.1"
+  }
+}
