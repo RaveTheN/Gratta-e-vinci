@@ -20,6 +20,7 @@ async function captureScreen(x, y, width, height) {
           [-1, 1, 1],
           [0, 1, 1],
         ]);
+        image.greyscale();
         await image.write("capture.png");
 
         resolve("capture.png");
@@ -44,7 +45,7 @@ async function performClickBasedOnText() {
   const aumenta = new Point(1613, 780);
   const diminuisci = new Point(1565, 780);
 
-  const probabilita = 5.49;
+  const probabilita = 5.4;
   let perseConsecutive = -1;
 
   let perse = -1;
@@ -101,7 +102,7 @@ async function performClickBasedOnText() {
         newValue === "null" ||
         newValue === " "
       ) {
-        break;
+        newValue = parseFloat(newScreen.replace(",", ".")).toFixed(2);
       } else if (newValue < baseValue) {
         perseConsecutive++;
         perse++;
@@ -120,14 +121,15 @@ async function performClickBasedOnText() {
             await mouse.leftClick(); // Clic sinistro
             vinte++;
           }
-          perseConsecutive = 0;
+          perseConsecutive = perseConsecutive - probabilita;
           aumenti = 0;
         }
       } else if (newValue === baseValue) {
         if (perseConsecutive > probabilita) {
-          await sleep(2000);
+          await sleep(200);
           await mouse.move(aumenta); // Sposta il mouse
           await mouse.leftClick(); // Clic sinistro
+          await sleep(200);
         }
 
         await mouse.move(scopri); // Sposta il mouse
