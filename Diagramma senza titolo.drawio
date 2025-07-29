@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36" version="28.0.7">
   <diagram name="Pagina-1" id="DiGROShBe6_BHW7J8G3q">
-    <mxGraphModel dx="815" dy="1597" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="983" dy="1686" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -151,9 +151,9 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="4pX8vZohO5UuYpyCai0n-20" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.468;exitY=0.998;exitDx=0;exitDy=0;exitPerimeter=0;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-93" target="4pX8vZohO5UuYpyCai0n-19">
+        <mxCell id="4pX8vZohO5UuYpyCai0n-20" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-100" target="4pX8vZohO5UuYpyCai0n-19">
           <mxGeometry relative="1" as="geometry">
-            <mxPoint x="253" y="480" as="sourcePoint" />
+            <mxPoint x="253" y="560" as="sourcePoint" />
             <Array as="points" />
           </mxGeometry>
         </mxCell>
@@ -196,7 +196,7 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-19" value="press play_collect" style="whiteSpace=wrap;html=1;rounded=0;" vertex="1" parent="1">
-          <mxGeometry x="192.89" y="609.41" width="120" height="60" as="geometry" />
+          <mxGeometry x="192.89" y="640" width="120" height="29.41" as="geometry" />
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-36" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-33" target="4pX8vZohO5UuYpyCai0n-35">
           <mxGeometry relative="1" as="geometry" />
@@ -332,14 +332,28 @@
         <mxCell id="4pX8vZohO5UuYpyCai0n-87" value="empty randoms" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
           <mxGeometry x="192.89" y="-440" width="120" height="40" as="geometry" />
         </mxCell>
+        <mxCell id="4pX8vZohO5UuYpyCai0n-101" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-93" target="4pX8vZohO5UuYpyCai0n-100">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-93" value="increase cash" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
-          <mxGeometry x="197.89" y="450" width="120" height="60" as="geometry" />
+          <mxGeometry x="197.89" y="410" width="120" height="30" as="geometry" />
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-98" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-96" target="4pX8vZohO5UuYpyCai0n-87">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-96" value="decrease current_cash by bet value" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
           <mxGeometry x="192.89" y="-520" width="117.11" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="4pX8vZohO5UuYpyCai0n-102" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-100">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="360" y="500" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="4pX8vZohO5UuYpyCai0n-100" value="is cash highest?" style="rhombus;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="212.89" y="470" width="80" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="4pX8vZohO5UuYpyCai0n-103" value="save new highest_cash" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="480" width="90" height="40" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
