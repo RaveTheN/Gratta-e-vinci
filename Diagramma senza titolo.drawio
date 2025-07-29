@@ -236,7 +236,7 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-42" value="have we reached max loss?" style="rhombus;whiteSpace=wrap;html=1;rounded=0;" vertex="1" parent="1">
-          <mxGeometry x="240" y="1770" width="200" height="80" as="geometry" />
+          <mxGeometry x="260" y="1770" width="170" height="80" as="geometry" />
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-57" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-55" target="4pX8vZohO5UuYpyCai0n-56">
           <mxGeometry relative="1" as="geometry" />
