@@ -17,7 +17,7 @@
             <mxPoint x="252.89" y="-980" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="_CnHaBAXVkDHwyhgGVDt-3" value="Prompt GUI to insert relevant data" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+        <mxCell id="_CnHaBAXVkDHwyhgGVDt-3" value="startup GUI&amp;nbsp; (insert relevant data)" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
           <mxGeometry x="192.89" y="-1080" width="120" height="40" as="geometry" />
         </mxCell>
         <mxCell id="_CnHaBAXVkDHwyhgGVDt-8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="_CnHaBAXVkDHwyhgGVDt-6" edge="1">
