@@ -74,8 +74,10 @@
             <mxPoint as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="_CnHaBAXVkDHwyhgGVDt-18" value="await 5s" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="_CnHaBAXVkDHwyhgGVDt-16" target="_CnHaBAXVkDHwyhgGVDt-17" edge="1">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="_CnHaBAXVkDHwyhgGVDt-18" value="await 2s" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="_CnHaBAXVkDHwyhgGVDt-16" target="_CnHaBAXVkDHwyhgGVDt-17" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
         </mxCell>
         <mxCell id="_CnHaBAXVkDHwyhgGVDt-16" value="Click on the corresponding tile" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
           <mxGeometry x="192.89" y="-100" width="120" height="50" as="geometry" />
@@ -154,7 +156,7 @@
         <mxCell id="4pX8vZohO5UuYpyCai0n-20" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-4" target="4pX8vZohO5UuYpyCai0n-19">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="4pX8vZohO5UuYpyCai0n-28" value="await 3s" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="4pX8vZohO5UuYpyCai0n-20">
+        <mxCell id="4pX8vZohO5UuYpyCai0n-28" value="await 1s" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="4pX8vZohO5UuYpyCai0n-20">
           <mxGeometry x="0.3565" y="4" relative="1" as="geometry">
             <mxPoint as="offset" />
           </mxGeometry>
