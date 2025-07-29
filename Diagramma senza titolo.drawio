@@ -192,7 +192,7 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-19" value="press play_collect" style="whiteSpace=wrap;html=1;rounded=0;" vertex="1" parent="1">
-          <mxGeometry x="192.89" y="640" width="120" height="29.41" as="geometry" />
+          <mxGeometry x="192.89" y="660" width="120" height="29.41" as="geometry" />
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-36" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-33" target="4pX8vZohO5UuYpyCai0n-35">
           <mxGeometry relative="1" as="geometry" />
@@ -360,6 +360,11 @@
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-106" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="4pX8vZohO5UuYpyCai0n-104" target="4pX8vZohO5UuYpyCai0n-19">
           <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="4pX8vZohO5UuYpyCai0n-108" value="await 1s" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="4pX8vZohO5UuYpyCai0n-106">
+          <mxGeometry x="-0.1228" y="3" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
         </mxCell>
         <mxCell id="4pX8vZohO5UuYpyCai0n-104" value="log stats" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
           <mxGeometry x="192.89" y="590" width="120" height="20" as="geometry" />
