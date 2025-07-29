@@ -116,8 +116,8 @@ async def test_main_game_logic():
         if loss >= max_loss:
             print("💸 Reached maximum loss!")
             break
-        if current_cash <= 0:
-            print("💀 Out of money!")
+        if current_cash < bet:
+            print("💀 Insufficient cash for bet!")
             break
 
         print(f"\n=== Round {rounds + 1} ===")
@@ -127,10 +127,11 @@ async def test_main_game_logic():
         test_empty_randoms()
         round_active = True
         
-        # Press play to start round (no cash deduction yet)
+        # Press play to start round and immediately deduct cash
         await simulate_click(Point(1581, 849), "PLAY - START ROUND")
-        print(f"🎰 Starting round with bet: {format_money(bet)}")
-        
+        await test_decrease_cash()  # Deduct bet amount immediately when starting round
+        print(f"🎰 Started round with bet: {format_money(bet)} - Cash deducted immediately")
+
         # Keep picking until 3 blues (win) or 1 red (lose)
         while round_active and picks < max_picks:
             # Generate and click tile
@@ -157,11 +158,14 @@ async def test_main_game_logic():
                         await simulate_click(Point(1581, 849), "COLLECT WINNINGS")
                         await test_increase_cash()
                         
+                        # Reset betting strategy after win - back to minimum bet
+                        tries = 0  # Reset tries counter
+                        bet = round(0.1, 2)  # Reset bet to minimum
+                        print(f"🎯 WIN! Bet reset to minimum: {format_money(bet)}")
+                        
                         # Reset for next round
                         picks = 0
-                        tries = 0
                         round_active = False
-                        print(f"💰 Won {format_money(bet * multiplier)}! New cash: {format_money(current_cash)}")
                         
                     else:
                         print(f"🎯 Got {picks} blue(s), need {max_picks - picks} more...")
@@ -170,24 +174,18 @@ async def test_main_game_logic():
                     print(f"🔴 Tile {tile_num} is RED - ROUND LOST!")
                     color_detected = True
                     
-                    # Lose the bet
-                    await test_decrease_cash()
+                    # Cash already deducted when round started, just update strategy
                     tries += 1
-                    
-                    # Update betting strategy
                     test_get_bet_from_mode_array()
-                    print(f"💸 Lost {format_money(bet)}! Tries: {tries}, Next bet: {format_money(bet)}")
+                    print(f"💸 LOSS! Bet increased to: {format_money(bet)} (try #{tries})")
                     
-                    if current_cash < bet:
-                        print("💰 Insufficient cash for next bet!")
-                        break
-                    
-                    # Calculate loss
-                    loss = round(highest_cash - current_cash, 2)  # Round to 2 decimal places
+                    # Calculate loss and check limits
+                    loss = round(highest_cash - current_cash, 2)
                     if loss >= max_loss:
                         print("📉 Reached maximum loss!")
                         break
                     
+                    # Reset picks and end round
                     picks = 0
                     round_active = False
                     
@@ -213,7 +211,7 @@ async def test_main_game_logic():
     print(f"💰 Final Cash: {format_money(current_cash)}")
     print(f"📈 Highest Cash: {format_money(highest_cash)}")
     print(f"🏁 Rounds Completed: {rounds}")
-    print(f"📉 Total Loss: {round(loss, 2)}")
+    print(f"📉 Total Loss: {format_money(loss)}")
     print(f"🎯 Final Picks: {picks}")
     print(f"🔄 Final Tries: {tries}")
 

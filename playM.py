@@ -1,12 +1,9 @@
 import asyncio
 import pyautogui
-import pytesseract
-import cv2
-import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter
-import time
+# import pytesseract  # Comment out for now
+# import cv2          # Comment out for now  
+# import numpy as np  # Comment out for now
 import random
-import math
 
 # Configure mouse speed (pyautogui uses duration for speed control)
 pyautogui.PAUSE = 0.1  # Pause between pyautogui calls
@@ -23,46 +20,47 @@ class Point:
 # Click point positions
 # Dictionary of tiles with their positions
 tiles = {
-    1: Point(1581, 849),
-    2: Point(1613, 780),
-    3: Point(1565, 780),
-    4: Point(1581, 780),
-    5: Point(1613, 849),
-    6: Point(1565, 849),
-    7: Point(1581, 780),
-    8: Point(1613, 780),
-    9: Point(1565, 780),
-    10: Point(1581, 849),
-    11: Point(1613, 780),
-    12: Point(1565, 780),
-    13: Point(1581, 780),
-    14: Point(1613, 849),
-    15: Point(1565, 849),
-    16: Point(1581, 780),
-    17: Point(1613, 780),
-    18: Point(1565, 780),
-    19: Point(1581, 849),
-    20: Point(1613, 780),
-    21: Point(1565, 780),
-    22: Point(1581, 780),
-    23: Point(1613, 849),
-    24: Point(1565, 849),
-    25: Point(1581, 780)
+    1: Point(1640, 740),
+    2: Point(1810, 740),
+    3: Point(1980, 740),
+    4: Point(2150, 740),
+    5: Point(2320, 740),
+    6: Point(1640, 868),
+    7: Point(1810, 868),
+    8: Point(1980, 868),
+    9: Point(2150, 868),
+    10: Point(2320, 868),
+    11: Point(1640, 990),
+    12: Point(1810, 990),
+    13: Point(1980, 990),
+    14: Point(2150, 990),
+    15: Point(2320, 990),
+    16: Point(1640, 1114),
+    17: Point(1810, 1114),
+    18: Point(1980, 1114),
+    19: Point(2150, 1114),
+    20: Point(2320, 1114),
+    21: Point(1640, 1238),
+    22: Point(1810, 1238),
+    23: Point(1980, 1238),
+    24: Point(2150, 1238),
+    25: Point(2320, 1238),
 }
 
 # Main control points
-play_collect = Point(1581, 849)
-raise_bet = Point(1613, 780)
-lower_bet = Point(1565, 780)
+play_collect = Point(2196, 1616)
+raise_bet = Point(1900, 1740)
+lower_bet = Point(1519, 1740)
+# lower_bet = Point(1028, 666)
 
 color = {"r": 0, "g": 0, "b": 0, "a": 0}
 
 # Define target colors
-target_blue = {"r": 0, "g": 0, "b": 255}  # Pure blue
-target_red = {"r": 255, "g": 0, "b": 0}   # Pure red
+target_blue = {"r": 1, "g": 108, "b": 238}  # Actual blue tile color
+target_red = {"r": 200, "g": 13, "b": 1}    # Updated red tile color
 
 # Global variables
-starting_cash = round(50, 2)  # Round to 2 decimal places
+starting_cash = round(2000.22, 2)  # Round to 2 decimal places
 current_cash = round(0, 2)  # Round to 2 decimal places
 highest_cash = round(0, 2)  # Round to 2 decimal places
 bet = round(0.1, 2)  # Round to 2 decimal places
@@ -75,7 +73,7 @@ loss = round(0, 2)  # Round to 2 decimal places
 max_loss = round(10, 2)  # Round to 2 decimal places
 max_rounds = 100
 max_picks = 3
-target_win = round(100, 2)  # Round to 2 decimal places
+target_win = round(2100, 2)  # Round to 2 decimal places
 wait_selected = False
 bet_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,1.2,1.4,1.5,1.6,1.8,2.0,2.5,3.0,3.5,4.0,4.5,5.0,6.0,7.0,8.0,9.0,10.0,12.0,14.0,16.0,18.0,20.0,25.0]
 
@@ -258,7 +256,7 @@ def is_color_in_range_blue(color, target_color, tolerance=50):
         abs(color["b"] - target_color["b"]) <= tolerance
     )
 
-# Function to check if color is in red range
+# Function to check if color is in red range  
 def is_color_in_range_red(color, target_color, tolerance=50):
     return (
         abs(color["r"] - target_color["r"]) <= tolerance and
@@ -289,8 +287,26 @@ def get_bet_from_mode_array():
 
 #Main function to run the game logic  
 async def main():
-    global current_cash, highest_cash, bet, picks, tries, rounds, loss
+    global current_cash, highest_cash, bet, picks, tries, rounds, loss, multiplier, max_loss, max_rounds, max_picks, target_win, wait_selected, selected_mode
+
+    #if max picks is not set, default to 3
+    if max_picks <= 0:
+        max_picks = 3
     
+    # If max rounds is not set, default to 100
+    if max_rounds <= 0:
+        max_rounds = 100
+    
+    # If max loss is not set, default to 10
+    if max_loss <= 0:
+        max_loss = 10
+
+    # If max picks is 2 set multipliter to 1.8, if 3 set to 2.4
+    if max_picks == 2:
+        multiplier = round(1.8, 2)
+    elif max_picks == 3:
+        multiplier = round(2.4, 2)
+
     # START - Initialize starting cash (startup old recast relevant data)
     current_cash = round(starting_cash, 2)  # Round to 2 decimal places
     highest_cash = round(starting_cash, 2)  # Round to 2 decimal places
@@ -321,6 +337,11 @@ async def main():
             print("Reached maximum loss!")
             break
 
+        # Check if we can afford the current bet
+        if round(current_cash, 2) < round(bet, 2):
+            print("Insufficient cash for bet!")
+            break
+
         # Optional wait
         if wait_selected:
             await random_await()
@@ -330,10 +351,11 @@ async def main():
         empty_randoms()
         round_active = True
         
-        # Press play to start the round (no cash deduction yet)
+        # Press play to start the round and immediately deduct cash
         await sleep(1)
         await play_or_collect()
-        print(f"Started new round {rounds + 1} with bet: {format_money(bet)}")
+        await decrease_cash()  # Deduct bet amount immediately when starting round
+        print(f"Started new round {rounds + 1} with bet: {format_money(bet)} - Cash deducted")
         
         # Keep picking tiles until we get 3 blues (win) or 1 red (lose)
         while round_active and picks < max_picks:
@@ -353,11 +375,16 @@ async def main():
             max_retries = 3
             
             while not color_detected and retry_count < max_retries:
-                color = read_color_at_point(Point(1581, 849))
+                # Get the position of the tile we just clicked
+                clicked_tile_position = tiles[randoms[-1]]
+                color = read_color_at_point(clicked_tile_position)
+                
+                # Print the actual color values detected
+                print(f"🎨 Color detected at tile {randoms[-1]} position ({clicked_tile_position.x}, {clicked_tile_position.y}): RGB({color['r']}, {color['g']}, {color['b']}, {color['a']})")
                 
                 if is_color_in_range_blue(color, target_blue):
                     # BLUE tile found
-                    print(f"Tile {randoms[-1]} is BLUE")
+                    print(f"✅ Tile {randoms[-1]} is BLUE - Matches target blue RGB(115, 9, 131)")
                     increase_picks()
                     color_detected = True
                     
@@ -373,9 +400,13 @@ async def main():
                         await increase_cash()
                         await save_new_highest_cash()
                         
+                        # Reset betting strategy after win - back to minimum bet
+                        tries = 0  # Reset tries counter
+                        bet = round(0.1, 2)  # Reset bet to minimum
+                        print(f"🎯 WIN! Bet reset to minimum: {format_money(bet)}")
+                        
                         # Reset for next round
                         picks = 0
-                        tries = 0
                         round_active = False
                         
                         log_state()
@@ -386,29 +417,18 @@ async def main():
                         
                 elif is_color_in_range_red(color, target_red):
                     # RED tile found - ROUND LOST
-                    print(f"❌ Tile {randoms[-1]} is RED - ROUND LOST!")
+                    print(f"❌ Tile {randoms[-1]} is RED - Matches target red RGB(200, 13, 1)")
                     color_detected = True
                     
-                    # Lose the bet amount
-                    await decrease_cash()
-                    
-                    # Update tries and betting strategy
+                    # Cash already deducted when round started, just update strategy
                     increase_tries()
                     
-                    # Get next bet amount from mode array
+                    # Get next bet amount from mode array (increases bet after loss)
                     get_bet_from_mode_array()
+                    print(f"💸 LOSS! Bet increased to: {format_money(bet)} (try #{tries})")
                     
-                    # Check if we can afford the next bet
-                    if round(current_cash, 2) < round(bet, 2):  # Round both values for comparison
-                        print("Insufficient cash for next bet!")
-                        break
-                    
-                    # Set the new bet amount in the game
-                    await decrease_bet_force()
-                    if bet > 0:
-                        target_bet_index = bet_values.index(bet) if bet in bet_values else 0
-                        for i in range(target_bet_index):
-                            await increase_bet()
+                    # DON'T force bet to minimum after loss - bet is already set correctly by get_bet_from_mode_array()
+                    # The bet will be set properly at the start of the next round
                     
                     # Calculate loss and check limits
                     loss = round(highest_cash - current_cash, 2)  # Round to 2 decimal places
@@ -426,7 +446,10 @@ async def main():
                     # Unknown color detected - retry after waiting
                     retry_count += 1
                     print(f"❓ Tile {randoms[-1]} - Unknown color detected (attempt {retry_count}/{max_retries})")
-                    log_color_debug(Point(1581, 849), color)
+                    print(f"   Expected: Blue RGB(115, 9, 131) or Red RGB(200, 13, 1)")
+                    print(f"   Actual: RGB({color['r']}, {color['g']}, {color['b']})")
+                    print(f"   Blue match (tolerance 25): {is_color_in_range_blue(color, target_blue, 25)}")
+                    print(f"   Red match (tolerance 50): {is_color_in_range_red(color, target_red, 50)}")
                     
                     if retry_count < max_retries:
                         print("   Waiting 1 second and retrying color detection...")
