@@ -76,10 +76,15 @@ class GrattaEVinciGUI:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # Settings & Coordinates Tab (combined)
-        settings_coords_frame = ttk.Frame(notebook)
-        notebook.add(settings_coords_frame, text="Settings & Coordinates")
-        self.create_settings_coordinates_tab(settings_coords_frame)
+        # Settings Tab
+        settings_frame = ttk.Frame(notebook)
+        notebook.add(settings_frame, text="Settings")
+        self.create_settings_tab(settings_frame)
+        
+        # Coordinates Tab
+        coordinates_frame = ttk.Frame(notebook)
+        notebook.add(coordinates_frame, text="Coordinates")
+        self.create_coordinates_tab(coordinates_frame)
         
         # Betting Modes Tab
         betting_frame = ttk.Frame(notebook)
@@ -183,231 +188,278 @@ class GrattaEVinciGUI:
         self.coord_label.pack(pady=5)
         
         # Tile positions frame
-        tile_frame = ttk.LabelFrame(parent, text="Tile Positions (5x5 Grid)", padding=10)
-        tile_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Create tile position entries
-        self.tile_vars = {}
-        for i in range(5):
-            for j in range(5):
-                tile_num = i * 5 + j + 1
-                row_frame = ttk.Frame(tile_frame)
-                if j == 0:
-                    row_frame.pack(fill=tk.X, pady=2)
-                
-                ttk.Label(row_frame, text=f"Tile {tile_num}:", width=8).pack(side=tk.LEFT, padx=2)
-                
-                x_var = tk.IntVar(value=1640 + j * 170)
-                y_var = tk.IntVar(value=740 + i * 128)
-                self.tile_vars[tile_num] = (x_var, y_var)
-                
-                ttk.Entry(row_frame, textvariable=x_var, width=6).pack(side=tk.LEFT, padx=1)
-                ttk.Entry(row_frame, textvariable=y_var, width=6).pack(side=tk.LEFT, padx=1)
-        
-        # Quick setup buttons
-        quick_frame = ttk.Frame(parent)
-        quick_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        ttk.Button(quick_frame, text="Auto-Generate Grid", command=self.auto_generate_grid).pack(side=tk.LEFT, padx=5)
-        ttk.Button(quick_frame, text="Test Click Tile 1", command=lambda: self.test_click_tile(1)).pack(side=tk.LEFT, padx=5)
-    
-    def create_settings_coordinates_tab(self, parent):
-        """Combined Settings and Coordinates tab"""
-        # Create scrollable container with optimized settings
-        canvas = tk.Canvas(parent, highlightthickness=0, bd=0)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        # Optimize scroll region updates
-        def configure_scroll_region(event=None):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-        
-        scrollable_frame.bind("<Configure>", configure_scroll_region)
-        
-        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Make canvas window responsive to parent width
-        def configure_canvas_width(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-        canvas.bind('<Configure>', configure_canvas_width)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Add optimized mouse wheel scrolling
-        def on_mousewheel(event):
-            try:
-                # Only scroll if scrollbar is visible and canvas exists
-                if scrollbar.winfo_viewable() and canvas.winfo_exists():
-                    canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            except tk.TclError:
-                pass
-        
-        # Bind to canvas instead of all widgets for better performance
-        canvas.bind("<MouseWheel>", on_mousewheel)
-        scrollable_frame.bind("<MouseWheel>", on_mousewheel)
-        
-        # Main container within scrollable frame
-        main_container = ttk.Frame(scrollable_frame)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        # === SETTINGS SECTION ===
-        settings_main_frame = ttk.LabelFrame(main_container, text="⚙️ Game Settings", padding=15)
-        settings_main_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Game Settings Frame
-        game_frame = ttk.LabelFrame(settings_main_frame, text="Game Configuration", padding=10)
-        game_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Configure grid weights for better expansion (batch configure)
-        grid_weights = [1, 1, 1, 1]
-        for i, weight in enumerate(grid_weights):
-            game_frame.grid_columnconfigure(i, weight=weight)
-        
-        # Starting Cash
-        ttk.Label(game_frame, text="Starting Cash:").grid(row=0, column=0, sticky=tk.W, pady=3, padx=5)
-        self.starting_cash_var = tk.DoubleVar(value=2001.50)
-        ttk.Entry(game_frame, textvariable=self.starting_cash_var, width=18).grid(row=0, column=1, padx=5, pady=3, sticky=tk.EW)
-        
-        # Target Win
-        ttk.Label(game_frame, text="Target Win:").grid(row=0, column=2, sticky=tk.W, pady=3, padx=5)
-        self.target_win_var = tk.DoubleVar(value=2100.0)
-        ttk.Entry(game_frame, textvariable=self.target_win_var, width=18).grid(row=0, column=3, padx=5, pady=3, sticky=tk.EW)
-        
-        # Max Loss
-        ttk.Label(game_frame, text="Max Loss:").grid(row=1, column=0, sticky=tk.W, pady=3, padx=5)
-        self.max_loss_var = tk.DoubleVar(value=10.0)
-        ttk.Entry(game_frame, textvariable=self.max_loss_var, width=18).grid(row=1, column=1, padx=5, pady=3, sticky=tk.EW)
-        
-        # Max Rounds
-        ttk.Label(game_frame, text="Max Rounds:").grid(row=1, column=2, sticky=tk.W, pady=3, padx=5)
-        self.max_rounds_var = tk.IntVar(value=100)
-        ttk.Entry(game_frame, textvariable=self.max_rounds_var, width=18).grid(row=1, column=3, padx=5, pady=3, sticky=tk.EW)
-        
-        # Max Picks
-        ttk.Label(game_frame, text="Max Picks (2 or 3):").grid(row=2, column=0, sticky=tk.W, pady=3, padx=5)
-        self.max_picks_var = tk.IntVar(value=3)
-        ttk.Spinbox(game_frame, from_=2, to=3, textvariable=self.max_picks_var, width=16).grid(row=2, column=1, padx=5, pady=3, sticky=tk.EW)
-        
-        # Betting Mode
-        ttk.Label(game_frame, text="Betting Mode:").grid(row=2, column=2, sticky=tk.W, pady=3, padx=5)
-        self.mode_var = tk.StringVar(value="normal")
-        mode_combo = ttk.Combobox(game_frame, textvariable=self.mode_var, width=15)
-        mode_combo['values'] = ("normal", "medium", "high", "safe")
-        mode_combo.grid(row=2, column=3, padx=5, pady=3, sticky=tk.EW)
-        
-        # Wait between rounds (span across columns)
-        self.wait_selected_var = tk.BooleanVar()
-        ttk.Checkbutton(game_frame, text="Random wait between rounds (1-6 min)", 
-                       variable=self.wait_selected_var).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=3, padx=5)
-        
-        # Betting Mode Editor Button
-        ttk.Button(game_frame, text="✏️ Edit Betting Modes", command=self.open_betting_mode_editor).grid(row=3, column=2, columnspan=2, padx=5, pady=3, sticky=tk.EW)
-        
-        # Control Points Frame
-        control_frame = ttk.LabelFrame(settings_main_frame, text="Control Points", padding=10)
-        control_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Configure grid weights (batch configure)
-        grid_weights = [1, 1, 1, 1, 1, 1]
-        for i, weight in enumerate(grid_weights):
-            control_frame.grid_columnconfigure(i, weight=weight)
-        
-        # Play/Collect Button
-        ttk.Label(control_frame, text="Play/Collect:").grid(row=0, column=0, sticky=tk.W, pady=3, padx=3)
-        self.play_x_var = tk.IntVar(value=2196)
-        self.play_y_var = tk.IntVar(value=1616)
-        ttk.Entry(control_frame, textvariable=self.play_x_var, width=10).grid(row=0, column=1, padx=2, pady=3)
-        ttk.Entry(control_frame, textvariable=self.play_y_var, width=10).grid(row=0, column=2, padx=2, pady=3)
-        
-        # Raise Bet Button
-        ttk.Label(control_frame, text="Raise Bet:").grid(row=0, column=3, sticky=tk.W, pady=3, padx=3)
-        self.raise_x_var = tk.IntVar(value=1900)
-        self.raise_y_var = tk.IntVar(value=1740)
-        ttk.Entry(control_frame, textvariable=self.raise_x_var, width=10).grid(row=0, column=4, padx=2, pady=3)
-        ttk.Entry(control_frame, textvariable=self.raise_y_var, width=10).grid(row=0, column=5, padx=2, pady=3)
-        
-        # Lower Bet Button
-        ttk.Label(control_frame, text="Lower Bet:").grid(row=1, column=0, sticky=tk.W, pady=3, padx=3)
-        self.lower_x_var = tk.IntVar(value=1519)
-        self.lower_y_var = tk.IntVar(value=1740)
-        ttk.Entry(control_frame, textvariable=self.lower_x_var, width=10).grid(row=1, column=1, padx=2, pady=3)
-        ttk.Entry(control_frame, textvariable=self.lower_y_var, width=10).grid(row=1, column=2, padx=2, pady=3)
-        
-        # Buttons
-        button_frame = ttk.Frame(settings_main_frame)
-        button_frame.pack(fill=tk.X, pady=(10, 0))
-        
-        ttk.Button(button_frame, text="💾 Save Settings", command=self.save_settings).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="📂 Load Settings", command=self.load_settings).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="🔄 Reset to Defaults", command=self.reset_settings).pack(side=tk.LEFT, padx=5)
-        
-        # === COORDINATES SECTION ===
-        coords_main_frame = ttk.LabelFrame(main_container, text="📍 Coordinates Configuration", padding=15)
-        coords_main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Mouse coordinates display
-        coord_frame = ttk.LabelFrame(coords_main_frame, text="Live Mouse Position", padding=10)
-        coord_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        self.coord_label = ttk.Label(coord_frame, text="Mouse Position: (0, 0)", font=("Courier", 12, "bold"))
-        self.coord_label.pack(pady=8)
-        
-        # Tile positions frame
-        tile_frame = ttk.LabelFrame(coords_main_frame, text="Tile Positions (Key Tiles Only)", padding=15)
+        tile_frame = ttk.LabelFrame(parent, text="Tile Positions (Smart Grid Setup)", padding=15)
         tile_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        # Instructions
+        instructions = ttk.Label(tile_frame, text="Enter key coordinates - other tiles will be auto-calculated:", 
+                                font=("TkDefaultFont", 10, "bold"), foreground="blue")
+        instructions.pack(pady=(0, 15))
         
         # Create tile position entries for specific tiles only
         self.tile_vars = {}
-        key_tiles = [1, 2, 3, 4, 5, 6, 11, 16, 21]
         
-        # Create rows for better organization
-        tiles_per_row = 3
-        for i, tile_num in enumerate(key_tiles):
-            if i % tiles_per_row == 0:
-                row_frame = ttk.Frame(tile_frame)
-                row_frame.pack(fill=tk.X, pady=8)
-                # Configure equal weights for all columns in the row
-                for col in range(tiles_per_row):
-                    row_frame.grid_columnconfigure(col, weight=1)
+        # Main container for input fields
+        input_container = ttk.Frame(tile_frame)
+        input_container.pack(fill=tk.X, pady=(0, 15))
+        
+        # Configure grid weights for responsive layout
+        for i in range(3):
+            input_container.grid_columnconfigure(i, weight=1)
+        
+        # Row 1: Tile 1 (X and Y coordinates)
+        tile1_frame = ttk.LabelFrame(input_container, text="🎯 Tile 1 (Reference Point)", padding=10)
+        tile1_frame.grid(row=0, column=0, columnspan=3, sticky=tk.EW, pady=(0, 10), padx=5)
+        
+        tile1_coords = ttk.Frame(tile1_frame)
+        tile1_coords.pack()
+        
+        ttk.Label(tile1_coords, text="X:", font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        x1_var = tk.IntVar(value=1640)
+        ttk.Entry(tile1_coords, textvariable=x1_var, width=8, font=("TkDefaultFont", 10)).pack(side=tk.LEFT, padx=(0, 15))
+        
+        ttk.Label(tile1_coords, text="Y:", font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        y1_var = tk.IntVar(value=740)
+        ttk.Entry(tile1_coords, textvariable=y1_var, width=8, font=("TkDefaultFont", 10)).pack(side=tk.LEFT)
+        
+        self.tile_vars[1] = (x1_var, y1_var)
+        
+        # Row 2: Top row X coordinates (tiles 2, 3, 4, 5)
+        top_row_frame = ttk.LabelFrame(input_container, text="📐 Top Row X Coordinates", padding=10)
+        top_row_frame.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(0, 10), padx=5)
+        
+        top_row_coords = ttk.Frame(top_row_frame)
+        top_row_coords.pack()
+        
+        # Configure equal spacing for top row entries
+        for i in range(4):
+            top_row_coords.grid_columnconfigure(i, weight=1)
+        
+        x_vars_top = []
+        for i, tile_num in enumerate([2, 3, 4, 5]):
+            tile_container = ttk.Frame(top_row_coords)
+            tile_container.grid(row=0, column=i, padx=10, pady=5)
             
-            # Calculate column position
-            col_pos = i % tiles_per_row
+            ttk.Label(tile_container, text=f"Tile {tile_num}:", font=("TkDefaultFont", 9, "bold")).pack()
+            x_var = tk.IntVar(value=1640 + i * 170 + 170)  # Start from tile 2 position
+            ttk.Entry(tile_container, textvariable=x_var, width=8, font=("TkDefaultFont", 9)).pack(pady=(2, 0))
             
-            tile_container = ttk.Frame(row_frame)
-            tile_container.grid(row=0, column=col_pos, padx=15, pady=5, sticky=tk.EW)
+            # Store x coordinate for tiles 2-5, y will be same as tile 1
+            self.tile_vars[tile_num] = (x_var, y1_var)  # Share Y with tile 1
+            x_vars_top.append(x_var)
+        
+        # Row 3: Left column Y coordinates (tiles 6, 11, 16, 21)
+        left_col_frame = ttk.LabelFrame(input_container, text="📏 Left Column Y Coordinates", padding=10)
+        left_col_frame.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=(0, 10), padx=5)
+        
+        left_col_coords = ttk.Frame(left_col_frame)
+        left_col_coords.pack()
+        
+        # Configure equal spacing for left column entries
+        for i in range(4):
+            left_col_coords.grid_columnconfigure(i, weight=1)
+        
+        y_vars_left = []
+        for i, tile_num in enumerate([6, 11, 16, 21]):
+            tile_container = ttk.Frame(left_col_coords)
+            tile_container.grid(row=0, column=i, padx=10, pady=5)
             
-            # Tile label
-            tile_label = ttk.Label(tile_container, text=f"Tile {tile_num}:", width=10, font=("TkDefaultFont", 10, "bold"))
-            tile_label.pack(side=tk.TOP, pady=(0, 5))
+            ttk.Label(tile_container, text=f"Tile {tile_num}:", font=("TkDefaultFont", 9, "bold")).pack()
+            y_var = tk.IntVar(value=740 + (i + 1) * 128)  # Start from tile 6 position
+            ttk.Entry(tile_container, textvariable=y_var, width=8, font=("TkDefaultFont", 9)).pack(pady=(2, 0))
             
-            # Coordinate entries container
-            coord_container = ttk.Frame(tile_container)
-            coord_container.pack(fill=tk.X)
-            
-            # Default coordinates based on tile number
-            default_x = 1640 + ((tile_num - 1) % 5) * 170
-            default_y = 740 + ((tile_num - 1) // 5) * 128
-            
-            x_var = tk.IntVar(value=default_x)
-            y_var = tk.IntVar(value=default_y)
-            self.tile_vars[tile_num] = (x_var, y_var)
-            
-            # X coordinate
-            ttk.Label(coord_container, text="X:", font=("TkDefaultFont", 9)).pack(side=tk.LEFT)
-            ttk.Entry(coord_container, textvariable=x_var, width=8, font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=(2, 5))
-            
-            # Y coordinate
-            ttk.Label(coord_container, text="Y:", font=("TkDefaultFont", 9)).pack(side=tk.LEFT)
-            ttk.Entry(coord_container, textvariable=y_var, width=8, font=("TkDefaultFont", 9)).pack(side=tk.LEFT, padx=2)
+            # Store y coordinate for tiles 6,11,16,21, x will be same as tile 1
+            self.tile_vars[tile_num] = (x1_var, y_var)  # Share X with tile 1
+            y_vars_left.append(y_var)
+        
+        # Auto-calculate and store all 25 tiles
+        def update_all_tiles():
+            """Update all 25 tile positions based on the input coordinates"""
+            try:
+                # Get reference coordinates
+                base_x = x1_var.get()
+                base_y = y1_var.get()
+                
+                # Get top row X coordinates
+                x_coords = [base_x] + [var.get() for var in x_vars_top]
+                
+                # Get left column Y coordinates  
+                y_coords = [base_y] + [var.get() for var in y_vars_left]
+                
+                # Generate all 25 tiles
+                for tile_num in range(1, 26):
+                    row = (tile_num - 1) // 5
+                    col = (tile_num - 1) % 5
+                    
+                    x = x_coords[col]
+                    y = y_coords[row]
+                    
+                    # Always update or create the tile variables with correct values
+                    if tile_num not in self.tile_vars:
+                        # Create new vars for tiles that don't exist yet
+                        x_var = tk.IntVar(value=x)
+                        y_var = tk.IntVar(value=y)
+                        self.tile_vars[tile_num] = (x_var, y_var)
+                    else:
+                        # Update existing tile coordinates
+                        current_x_var, current_y_var = self.tile_vars[tile_num]
+                        
+                        # For tiles 1, 2-5, 6,11,16,21 - these are input tiles, don't override them
+                        if tile_num == 1:
+                            # Tile 1 is the reference, already has correct values
+                            pass
+                        elif tile_num in [2, 3, 4, 5]:
+                            # These share Y with tile 1, but have their own X - don't override
+                            pass
+                        elif tile_num in [6, 11, 16, 21]:
+                            # These share X with tile 1, but have their own Y - don't override
+                            pass
+                        else:
+                            # For all other tiles (calculated ones), update the values
+                            current_x_var.set(x)
+                            current_y_var.set(y)
+            except Exception as e:
+                print(f"Error in update_all_tiles: {e}")
+        
+        # Bind update function to coordinate changes
+        def on_coordinate_change(*args):
+            self.root.after_idle(update_all_tiles)
+        
+        # Bind all coordinate variables to the update function
+        x1_var.trace('w', on_coordinate_change)
+        y1_var.trace('w', on_coordinate_change)
+        for var in x_vars_top:
+            var.trace('w', on_coordinate_change)
+        for var in y_vars_left:
+            var.trace('w', on_coordinate_change)
+        
+        # Initial calculation
+        update_all_tiles()
+        
+        # Preview frame to show calculated coordinates
+        preview_frame = ttk.LabelFrame(tile_frame, text="📋 Calculated Grid Preview", padding=10)
+        preview_frame.pack(fill=tk.X, pady=(15, 0))
+        
+        # Create text widget for preview
+        self.tile_preview_text = scrolledtext.ScrolledText(preview_frame, height=8, width=80, state=tk.DISABLED)
+        self.tile_preview_text.pack(fill=tk.X, pady=(5, 0))
+        
+        def update_preview():
+            """Update the tile preview display"""
+            try:
+                preview_text = "Calculated tile coordinates (5x5 grid):\n"
+                preview_text += "-" * 50 + "\n"
+                
+                for row in range(5):
+                    row_text = ""
+                    for col in range(5):
+                        tile_num = row * 5 + col + 1
+                        if tile_num in self.tile_vars:
+                            x = self.tile_vars[tile_num][0].get()
+                            y = self.tile_vars[tile_num][1].get()
+                            row_text += f"T{tile_num:2d}({x:4d},{y:4d}) "
+                        else:
+                            row_text += f"T{tile_num:2d}(----,----) "
+                    preview_text += row_text + "\n"
+                
+                # Update the preview
+                self.tile_preview_text.config(state=tk.NORMAL)
+                self.tile_preview_text.delete(1.0, tk.END)
+                self.tile_preview_text.insert(tk.END, preview_text)
+                self.tile_preview_text.config(state=tk.DISABLED)
+            except:
+                pass  # Ignore errors during UI updates
+        
+        # Bind preview updates to coordinate changes
+        def on_preview_update(*args):
+            self.root.after_idle(update_preview)
+        
+        x1_var.trace('w', on_preview_update)
+        y1_var.trace('w', on_preview_update)
+        for var in x_vars_top:
+            var.trace('w', on_preview_update)
+        for var in y_vars_left:
+            var.trace('w', on_preview_update)
+        
+        # Initial preview
+        self.root.after(100, update_preview)
         
         # Quick setup buttons
-        quick_frame = ttk.Frame(coords_main_frame)
+        quick_frame = ttk.Frame(tile_frame)  # Change from coords_main_frame to tile_frame
         quick_frame.pack(fill=tk.X, pady=(10, 0))
         
-        ttk.Button(quick_frame, text="🔄 Auto-Generate Key Tiles", command=self.auto_generate_grid).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_frame, text="🔄 Reset to Default Grid", command=self.reset_tile_grid).pack(side=tk.LEFT, padx=5)
         ttk.Button(quick_frame, text="🎯 Test Click Tile 1", command=lambda: self.test_click_tile(1)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_frame, text="📋 Show All Coordinates", command=self.show_all_coordinates).pack(side=tk.LEFT, padx=5)
+    
+    def reset_tile_grid(self):
+        """Reset tile grid to default coordinates"""
+        if hasattr(self, 'tile_vars') and self.tile_vars:
+            # Reset tile 1
+            if 1 in self.tile_vars:
+                self.tile_vars[1][0].set(1640)  # X
+                self.tile_vars[1][1].set(740)   # Y
+            
+            # Reset top row X coordinates (tiles 2-5)
+            default_x_values = [1810, 1980, 2150, 2320]  # 170px spacing
+            for i, tile_num in enumerate([2, 3, 4, 5]):
+                if tile_num in self.tile_vars:
+                    self.tile_vars[tile_num][0].set(default_x_values[i])
+            
+            # Reset left column Y coordinates (tiles 6, 11, 16, 21)
+            default_y_values = [868, 996, 1124, 1252]  # 128px spacing
+            for i, tile_num in enumerate([6, 11, 16, 21]):
+                if tile_num in self.tile_vars:
+                    self.tile_vars[tile_num][1].set(default_y_values[i])
+        
+        messagebox.showinfo("Reset", "Tile grid reset to default coordinates!")
+
+    def show_all_coordinates(self):
+        """Show all 25 tile coordinates in a popup"""
+        coords_window = tk.Toplevel(self.root)
+        coords_window.title("All Tile Coordinates")
+        coords_window.geometry("600x500")
+        coords_window.resizable(True, True)
+        
+        # Make window modal
+        coords_window.transient(self.root)
+        coords_window.grab_set()
+        
+        # Create text widget
+        text_frame = ttk.Frame(coords_window)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        coords_text = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD)
+        coords_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Generate coordinates display
+        coords_display = "ALL TILE COORDINATES (5x5 Grid)\n"
+        coords_display += "=" * 40 + "\n\n"
+        
+        for row in range(5):
+            coords_display += f"Row {row + 1}:\n"
+            for col in range(5):
+                tile_num = row * 5 + col + 1
+                if tile_num in self.tile_vars:
+                    x = self.tile_vars[tile_num][0].get()
+                    y = self.tile_vars[tile_num][1].get()
+                    coords_display += f"  Tile {tile_num:2d}: ({x:4d}, {y:4d})\n"
+                else:
+                    coords_display += f"  Tile {tile_num:2d}: (Not set)\n"
+            coords_display += "\n"
+        
+        coords_display += "Input Method Summary:\n"
+        coords_display += "-" * 25 + "\n"
+        coords_display += "• Tile 1: Both X and Y coordinates (reference point)\n"
+        coords_display += "• Tiles 2-5: Only X coordinates (Y shared with Tile 1)\n"
+        coords_display += "• Tiles 6,11,16,21: Only Y coordinates (X shared with Tile 1)\n"
+        coords_display += "• All other tiles: Auto-calculated from grid pattern\n"
+        
+        coords_text.insert(tk.END, coords_display)
+        coords_text.config(state=tk.DISABLED)
+        
+        # Close button
+        ttk.Button(coords_window, text="Close", command=coords_window.destroy).pack(pady=10)
     
     def create_betting_modes_tab(self, parent):
         # Create main container directly without scrollable canvas for better responsiveness
@@ -1000,6 +1052,7 @@ class GrattaEVinciGUI:
         self.log_message(f"📈 Bet increased to: {self.format_money(self.bet)}")
     
     async def decrease_bet(self):
+        await asyncio.sleep(0.5)
         """Decrease bet by clicking lower bet button"""
         lower_x = self.lower_x_var.get()
         lower_y = self.lower_y_var.get()
@@ -1202,7 +1255,6 @@ class GrattaEVinciGUI:
                     self.current_cash += win_amount
                     self.current_cash = round(self.current_cash, 2)
                     self.total_win += win_amount  # Add this line
-                    self.total_win = round(self.total_win, 2)  # Add this line
                     self.log_message(f"💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)}")
                     
                     # Reset betting strategy after win
@@ -1274,11 +1326,6 @@ class GrattaEVinciGUI:
                 self.root.after(0, self.update_stats_display)
                 
                 # Log current state
-                self.log_message(f"📊 Round {round_num} complete - Cash: {self.format_money(self.current_cash)}, Next bet: {self.format_money(self.bet)}, Loss: {self.format_money(self.loss)}")
-                
-                time.sleep(2)  # Simulate game delay
-            
-            # Test completed
             self.log_message("\n=== TEST MODE RESULTS ===")
             self.log_message(f"💰 Final cash: {self.format_money(self.current_cash)}")
             self.log_message(f"📈 Highest cash: {self.format_money(self.highest_cash)}")
