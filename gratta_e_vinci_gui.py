@@ -995,7 +995,7 @@ class GrattaEVinciGUI:
         """Decrease bet by clicking lower bet button"""
         lower_x = self.lower_x_var.get()
         lower_y = self.lower_y_var.get()
-        await asyncio.sleep(1)  # Same timing as playM.py
+        await asyncio.sleep(0.5)  # Same timing as playM.py
         pyautogui.click(lower_x, lower_y)
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
