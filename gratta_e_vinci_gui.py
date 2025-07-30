@@ -1044,7 +1044,7 @@ class GrattaEVinciGUI:
         """Increase bet by clicking raise bet button"""
         raise_x = self.raise_x_var.get()
         raise_y = self.raise_y_var.get()
-        await asyncio.sleep(0.5)  # Small delay to ensure click is registered (same as playM.py)
+        await asyncio.sleep(1)  # Small delay to ensure click is registered (same as playM.py)
         pyautogui.click(raise_x, raise_y)
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
@@ -1052,11 +1052,11 @@ class GrattaEVinciGUI:
         self.log_message(f"📈 Bet increased to: {self.format_money(self.bet)}")
     
     async def decrease_bet(self):
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1)
         """Decrease bet by clicking lower bet button"""
         lower_x = self.lower_x_var.get()
         lower_y = self.lower_y_var.get()
-        await asyncio.sleep(0.5)  # Same timing as playM.py
+        await asyncio.sleep(1)  # Same timing as playM.py
         pyautogui.click(lower_x, lower_y)
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
@@ -1087,7 +1087,7 @@ class GrattaEVinciGUI:
         """Click on a specific tile"""
         if tile_number in self.tiles:
             point = self.tiles[tile_number]
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
             pyautogui.click(point.x, point.y)
             self.log_message(f"🎯 Clicked tile {tile_number} at ({point.x}, {point.y})")
         else:
@@ -1459,7 +1459,7 @@ class GrattaEVinciGUI:
             self.root.after(0, self.update_stats_display)
             
             # Small delay between rounds
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
         
         # Game ended
         self.root.after(0, self.stop_game)
@@ -1498,11 +1498,11 @@ class GrattaEVinciGUI:
             tile_number = self.generate_random_tile()
             
             # Wait for game to process
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
             
             # Click on the corresponding tile
             await self.click_tile(tile_number)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
             
             # Check color of the revealed tile with retry mechanism
             color_detected = False

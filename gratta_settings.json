@@ -1,7 +1,7 @@
 {
-  "starting_cash": 9.36,
-  "target_win": 20.0,
-  "max_loss": 3.0,
+  "starting_cash": 16.8,
+  "target_win": 200.0,
+  "max_loss": 1.8,
   "max_rounds": 100,
   "max_picks": 3,
   "mode": "normal",
