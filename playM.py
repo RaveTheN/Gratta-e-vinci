@@ -21,37 +21,37 @@ class Point:
 # Click point positions
 # Dictionary of tiles with their positions
 tiles = {
-    1: Point(1640, 740),
-    2: Point(1810, 740),
-    3: Point(1980, 740),
-    4: Point(2150, 740),
-    5: Point(2320, 740),
-    6: Point(1640, 868),
-    7: Point(1810, 868),
-    8: Point(1980, 868),
-    9: Point(2150, 868),
-    10: Point(2320, 868),
-    11: Point(1640, 990),
-    12: Point(1810, 990),
-    13: Point(1980, 990),
-    14: Point(2150, 990),
-    15: Point(2320, 990),
-    16: Point(1640, 1114),
-    17: Point(1810, 1114),
-    18: Point(1980, 1114),
-    19: Point(2150, 1114),
-    20: Point(2320, 1114),
-    21: Point(1640, 1238),
-    22: Point(1810, 1238),
-    23: Point(1980, 1238),
-    24: Point(2150, 1238),
-    25: Point(2320, 1238),
+    1: Point(1283, 417),
+    2: Point(1363, 417),
+    3: Point(1443, 417),
+    4: Point(1523, 417),
+    5: Point(1603, 417),
+    6: Point(1283, 476),
+    7: Point(1363, 476),
+    8: Point(1443, 476),
+    9: Point(1523, 476),
+    10: Point(1603, 476),
+    11: Point(1283, 535),
+    12: Point(1363, 535),
+    13: Point(1443, 535),
+    14: Point(1523, 535),
+    15: Point(1603, 535),
+    16: Point(1283, 594),
+    17: Point(1363, 594),
+    18: Point(1443, 594),
+    19: Point(1523, 594),
+    20: Point(1603, 594),
+    21: Point(1283, 594),
+    22: Point(1363, 594),
+    23: Point(1443, 594),
+    24: Point(1523, 594),
+    25: Point(1603, 594)
 }
 
 # Main control points
-play_collect = Point(2196, 1616)
-raise_bet = Point(1900, 1740)
-lower_bet = Point(1519, 1740)
+play_collect = Point(1528, 829)
+raise_bet = Point(1411, 889)
+lower_bet = Point(1238, 889)
 # lower_bet = Point(1028, 666)
 
 color = {"r": 0, "g": 0, "b": 0, "a": 0}

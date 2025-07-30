@@ -984,26 +984,22 @@ class GrattaEVinciGUI:
         """Increase bet by clicking raise bet button"""
         raise_x = self.raise_x_var.get()
         raise_y = self.raise_y_var.get()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(2)  # Small delay to ensure click is registered (same as playM.py)
         pyautogui.click(raise_x, raise_y)
-        # Update bet value (simplified - in real game this would be read from screen)
-        current_bet_index = next((i for i, v in enumerate([0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.4, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]) if v >= self.bet), 0)
-        bet_values = [0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.4, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]
-        if current_bet_index < len(bet_values) - 1:
-            self.bet = bet_values[current_bet_index + 1]
+        # Update bet value using the same logic as playM.py
+        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
+        self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)  # Increase bet to next value and round
         self.log_message(f"📈 Bet increased to: {self.format_money(self.bet)}")
     
     async def decrease_bet(self):
         """Decrease bet by clicking lower bet button"""
         lower_x = self.lower_x_var.get()
         lower_y = self.lower_y_var.get()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1)  # Same timing as playM.py
         pyautogui.click(lower_x, lower_y)
-        # Update bet value (simplified - in real game this would be read from screen)
-        bet_values = [0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.4, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]
-        current_bet_index = next((i for i, v in enumerate(bet_values) if v >= self.bet), 0)
-        if current_bet_index > 0:
-            self.bet = bet_values[current_bet_index - 1]
+        # Update bet value using the same logic as playM.py
+        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
+        self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)  # Decrease bet to previous value and round
         self.log_message(f"📉 Bet decreased to: {self.format_money(self.bet)}")
     
     async def decrease_bet_force(self):
@@ -1011,12 +1007,12 @@ class GrattaEVinciGUI:
         lower_x = self.lower_x_var.get()
         lower_y = self.lower_y_var.get()
         
-        # Click lower bet button multiple times to ensure minimum
-        for i in range(25):  # Should be enough to reach minimum
+        # Click lower bet button multiple times to ensure minimum (same as playM.py)
+        for i in range(len(self.bet_values)):
             await asyncio.sleep(0.05)
             pyautogui.click(lower_x, lower_y)
         
-        self.bet = 0.1  # Set to minimum
+        self.bet = round(0.1, 2)  # Ensure bet is set to minimum and rounded (same as playM.py)
         self.log_message("🔽 Bet forced to minimum: 0.10")
     
     async def click_tile(self, tile_number):
@@ -1195,26 +1191,40 @@ class GrattaEVinciGUI:
                     
                     self.log_message(f"💸 Lost {self.format_money(self.bet)}! New balance: {self.format_money(self.current_cash)}")
                     
-                    # Get betting strategy from selected mode
+                    # Get betting strategy from selected mode (same logic as real game mode)
                     selected_mode_name = self.mode_var.get()
                     if selected_mode_name in self.betting_modes:
                         mode_array = self.betting_modes[selected_mode_name]
                         # Use tries as index, but cap at array length - 1
                         bet_index = min(self.tries, len(mode_array) - 1)
+                        target_bet = mode_array[bet_index]
                         old_bet = self.bet
-                        self.bet = mode_array[bet_index]
+                        
+                        # Simulate stepping through bet increases (same as real game mode)
+                        while self.bet < target_bet:
+                            # Simulate increase_bet logic without actual clicking
+                            current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
+                            self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)
+                        
                         self.log_message(f"📈 Bet updated from {selected_mode_name} mode: {self.format_money(old_bet)} → {self.format_money(self.bet)} (try #{self.tries})")
+                        
+                        # Update highest bet tracking (same as real game mode)
+                        if self.bet > self.highest_bet:
+                            self.highest_bet = round(self.bet, 2)
                     else:
                         # Fallback to simple increase if mode not found
                         old_bet = self.bet
                         self.bet = min(self.bet * 1.5, 5.0)  # Increase bet
                         self.log_message(f"📈 Bet increased: {self.format_money(old_bet)} → {self.format_money(self.bet)}")
+                        
+                        # Update highest bet tracking for fallback case too
+                        if self.bet > self.highest_bet:
+                            self.highest_bet = round(self.bet, 2)
                 
                 # Update highest values
                 if self.current_cash > self.highest_cash:
                     self.highest_cash = self.current_cash
-                if self.bet > self.highest_bet:
-                    self.highest_bet = self.bet
+                # Note: highest_bet already updated above in the betting logic
                 
                 # Calculate loss
                 self.loss = max(0, round(self.highest_cash - self.current_cash, 2))
@@ -1523,31 +1533,58 @@ class GrattaEVinciGUI:
             self.log_message("🎉 Round WON!")
             self.current_cash += self.bet * 2.4
             self.tries = 0
-            self.bet = 0.1  # Reset bet on win
+            
+            # Reset bet to minimum after win (same as playM.py logic)
+            while self.bet > 0.1:
+                # Simulate decrease_bet logic without actual clicking
+                current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
+                self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)
+            self.log_message(f"🎯 WIN! Bet reset to minimum: {self.format_money(self.bet)}")
         else:
             self.log_message("💸 Round LOST!")
             self.current_cash -= self.bet
             self.tries += 1
             
-            # Get betting strategy from selected mode
+            # Get betting strategy from selected mode (same logic as real game mode)
             selected_mode_name = self.mode_var.get()
             if selected_mode_name in self.betting_modes:
                 mode_array = self.betting_modes[selected_mode_name]
                 # Use tries as index, but cap at array length - 1
                 bet_index = min(self.tries, len(mode_array) - 1)
-                self.bet = mode_array[bet_index]
-                self.log_message(f"Bet updated from {selected_mode_name} mode: {self.format_money(self.bet)} (try #{self.tries})")
+                target_bet = mode_array[bet_index]
+                old_bet = self.bet
+                
+                # Simulate stepping through bet increases (same as real game mode)
+                while self.bet < target_bet:
+                    # Simulate increase_bet logic without actual clicking
+                    current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
+                    self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)
+                
+                self.log_message(f"Bet updated from {selected_mode_name} mode: {self.format_money(old_bet)} → {self.format_money(self.bet)} (try #{self.tries})")
+                
+                # Update highest bet tracking
+                if self.bet > self.highest_bet:
+                    self.highest_bet = round(self.bet, 2)
             else:
                 # Fallback to simple increase if mode not found
                 bet_multipliers = [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0]
                 if self.tries < len(bet_multipliers):
-                    self.bet = bet_multipliers[self.tries]
+                    target_bet = bet_multipliers[self.tries]
+                    old_bet = self.bet
+                    
+                    # Simulate stepping through bet increases
+                    while self.bet < target_bet:
+                        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
+                        self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)
+                    
+                    # Update highest bet tracking for fallback case too
+                    if self.bet > self.highest_bet:
+                        self.highest_bet = round(self.bet, 2)
         
         # Update highest values
         if self.current_cash > self.highest_cash:
             self.highest_cash = self.current_cash
-        if self.bet > self.highest_bet:
-            self.highest_bet = self.bet
+        # Note: highest_bet already updated above in the betting logic
         
         self.loss = max(0, self.highest_cash - self.current_cash)
     
