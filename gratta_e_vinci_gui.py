@@ -43,6 +43,7 @@ class GrattaEVinciGUI:
         self.tries = 0
         self.rounds = 0
         self.loss = 0
+        self.total_win = 0  # Add this line
         self.randoms = []
         
         # Target colors
@@ -715,6 +716,7 @@ class GrattaEVinciGUI:
         self.loss_label = ttk.Label(stats_grid, text="0.00", font=("Courier", 10))
         self.loss_label.grid(row=3, column=1, sticky=tk.W, padx=10, pady=2)
         
+
         # Progress bar
         progress_frame = ttk.LabelFrame(parent, text="Progress", padding=10)
         progress_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -725,6 +727,12 @@ class GrattaEVinciGUI:
         
         self.progress_label = ttk.Label(progress_frame, text="Ready to start")
         self.progress_label.pack()
+
+        
+        # Add Total Win display
+        ttk.Label(stats_grid, text="🎉 Total Win:").grid(row=3, column=2, sticky=tk.W, pady=2)
+        self.total_win_label = ttk.Label(stats_grid, text="0.00", font=("Courier", 10))
+        self.total_win_label.grid(row=3, column=3, sticky=tk.W, padx=10, pady=2)
     
     def start_mouse_monitoring(self):
         """Start monitoring mouse coordinates"""
@@ -984,7 +992,7 @@ class GrattaEVinciGUI:
         """Increase bet by clicking raise bet button"""
         raise_x = self.raise_x_var.get()
         raise_y = self.raise_y_var.get()
-        await asyncio.sleep(2)  # Small delay to ensure click is registered (same as playM.py)
+        await asyncio.sleep(0.5)  # Small delay to ensure click is registered (same as playM.py)
         pyautogui.click(raise_x, raise_y)
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
@@ -1171,6 +1179,7 @@ class GrattaEVinciGUI:
         self.tries = 0
         self.rounds = 0
         self.loss = 0.0
+        self.total_win = 0.0  # Add this line
         self.update_stats_display()
         
         threading.Thread(target=self.run_test_mode, daemon=True).start()
@@ -1192,19 +1201,25 @@ class GrattaEVinciGUI:
                     win_amount = self.bet * 2.4
                     self.current_cash += win_amount
                     self.current_cash = round(self.current_cash, 2)
+                    self.total_win += win_amount  # Add this line
+                    self.total_win = round(self.total_win, 2)  # Add this line
                     self.log_message(f"💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)}")
                     
                     # Reset betting strategy after win
                     self.tries = 0
                     
-                    # Get selected mode and use its first value as minimum bet (same as playM.py)
+                    # Get selected mode and use its first value as minimum bet (same as playM.py logic)
                     selected_mode_name = self.mode_var.get()
                     if selected_mode_name in self.betting_modes:
                         min_bet = self.betting_modes[selected_mode_name][0]
                     else:
                         min_bet = 0.1  # Fallback to 0.1 if mode not found
                     
-                    self.bet = round(min_bet, 2)  # Reset bet on win
+                    # Reset bet to minimum after win (same as playM.py logic)
+                    while self.bet > min_bet:
+                        # Simulate decrease_bet logic without actual clicking
+                        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
+                        self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)
                     self.log_message(f"🎯 WIN! Bet reset to minimum: {self.format_money(self.bet)}")
                 else:
                     self.log_message("💸 Test LOSS!")
@@ -1317,6 +1332,7 @@ class GrattaEVinciGUI:
         self.tries = 0
         self.rounds = 0
         self.loss = 0.0
+        self.total_win = 0.0  # Add this line
         self.randoms = []
         
         self.log_message(f"💰 Initialized with cash: {self.format_money(self.current_cash)}")
@@ -1396,7 +1412,7 @@ class GrattaEVinciGUI:
             self.root.after(0, self.update_stats_display)
             
             # Small delay between rounds
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.5)
         
         # Game ended
         self.root.after(0, self.stop_game)
@@ -1435,11 +1451,11 @@ class GrattaEVinciGUI:
             tile_number = self.generate_random_tile()
             
             # Wait for game to process
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
             
             # Click on the corresponding tile
             await self.click_tile(tile_number)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(0.5)
             
             # Check color of the revealed tile with retry mechanism
             color_detected = False
@@ -1472,6 +1488,8 @@ class GrattaEVinciGUI:
                         win_amount = self.bet * multiplier
                         self.current_cash += win_amount
                         self.current_cash = round(self.current_cash, 2)
+                        self.total_win += win_amount  # Add this line
+                        self.total_win = round(self.total_win, 2)  # Add this line
                         
                         self.log_message(f"💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)}")
                         
@@ -1522,6 +1540,8 @@ class GrattaEVinciGUI:
                         # Use tries as index, but cap at array length - 1
                         bet_index = min(self.tries, len(mode_array) - 1)
                         target_bet = mode_array[bet_index]
+
+                        await asyncio.sleep(2)  # Small delay to give time for UI updates
                         
                         # Adjust bet to target
                         while self.bet < target_bet:
@@ -1642,6 +1662,7 @@ class GrattaEVinciGUI:
         self.rounds_label.config(text=str(self.rounds))
         self.tries_label.config(text=str(self.tries))
         self.loss_label.config(text=self.format_money(self.loss))
+        self.total_win_label.config(text=self.format_money(self.total_win))  # Add this line
     
     def format_money(self, value):
         """Format monetary values to always show exactly 2 decimal places"""
