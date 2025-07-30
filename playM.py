@@ -60,7 +60,7 @@ target_blue = {"r": 1, "g": 108, "b": 238}  # Actual blue tile color
 target_red = {"r": 200, "g": 13, "b": 1}    # Updated red tile color
 
 # Global variables
-starting_cash = round(2000.22, 2)  # Round to 2 decimal places
+starting_cash = round(2001.50, 2)  # Round to 2 decimal places
 current_cash = round(0, 2)  # Round to 2 decimal places
 highest_cash = round(0, 2)  # Round to 2 decimal places
 bet = round(0.1, 2)  # Round to 2 decimal places
@@ -113,16 +113,16 @@ def format_money(value):
 
 # Function to increase bet
 async def increase_bet():
-    await sleep(0.5)  # Small delay to ensure click is registered
+    await sleep(2)  # Small delay to ensure click is registered
     pyautogui.click(raise_bet.x, raise_bet.y)
     global bet
-    current_index = bet_values.index(bet) if bet in bet_values else 0
+    current_index = bet_values.index(bet) if bet in bet_values else tries
     bet = round(bet_values[min(current_index + 1, len(bet_values) - 1)], 2)  # Increase bet to next value and round
     print(f"Bet increased to: {format_money(bet)}")
 
 # Function to decrease bet  
 async def decrease_bet():
-    await sleep(0.5)
+    await sleep(1)
     pyautogui.click(lower_bet.x, lower_bet.y)
     global bet
     current_index = bet_values.index(bet) if bet in bet_values else 0
@@ -131,7 +131,7 @@ async def decrease_bet():
 
 # Function to play/collect
 async def play_or_collect():
-    await sleep(0.5)
+    await sleep(1)
     pyautogui.click(play_collect.x, play_collect.y)
     print("Clicked play/collect button")
 
@@ -275,15 +275,6 @@ async def save_new_highest_cash():
         highest_cash = round(current_cash, 2)  # Round to 2 decimal places
         print(f"New highest cash saved: {format_money(highest_cash)}")
 
-# Function to get corresponding bet value from mode array
-def get_bet_from_mode_array():
-    global bet, tries, selected_mode
-    if tries < len(selected_mode):
-        bet = round(selected_mode[tries], 2)  # Round to 2 decimal places
-        print(f"Bet set from mode array: {bet}")
-    else:
-        bet = round(0, 2)  # Round to 2 decimal places
-        print("Bet set to 0 - beyond mode array")
 
 #Main function to run the game logic  
 async def main():
@@ -352,7 +343,6 @@ async def main():
         round_active = True
         
         # Press play to start the round and immediately deduct cash
-        await sleep(1)
         await play_or_collect()
         await decrease_cash()  # Deduct bet amount immediately when starting round
         print(f"Started new round {rounds + 1} with bet: {format_money(bet)} - Cash deducted")
@@ -363,12 +353,12 @@ async def main():
             generate_random_tile()
             
             # Wait for game to process
-            await sleep(5)
+            await sleep(1)
             
             # Click on the corresponding tile
             await click_tile(randoms[-1])
-            await sleep(2)
-            
+            await sleep(1)
+
             # Check color of the revealed tile with retry mechanism
             color_detected = False
             retry_count = 0
@@ -393,7 +383,6 @@ async def main():
                         print("🎉 THREE BLUES! ROUND WON!")
                         
                         # Press collect to get winnings
-                        await sleep(1)
                         await play_or_collect()
                         
                         # Increase cash by bet times multiplier (we win!)
@@ -402,11 +391,15 @@ async def main():
                         
                         # Reset betting strategy after win - back to minimum bet
                         tries = 0  # Reset tries counter
-                        bet = round(0.1, 2)  # Reset bet to minimum
+                        picks = 0  # Reset picks for next round
+
+                        #decrease bet down to minimum
+                        while bet > 0.1:
+                            await decrease_bet()
+
                         print(f"🎯 WIN! Bet reset to minimum: {format_money(bet)}")
                         
                         # Reset for next round
-                        picks = 0
                         round_active = False
                         
                         log_state()
@@ -422,14 +415,13 @@ async def main():
                     
                     # Cash already deducted when round started, just update strategy
                     increase_tries()
-                    
-                    # Get next bet amount from mode array (increases bet after loss)
-                    get_bet_from_mode_array()
+
+                    print(f"New bet amount from mode array: {selected_mode[tries]}")
+                    while bet < selected_mode[tries]:
+                        await increase_bet()
                     print(f"💸 LOSS! Bet increased to: {format_money(bet)} (try #{tries})")
                     
-                    # DON'T force bet to minimum after loss - bet is already set correctly by get_bet_from_mode_array()
-                    # The bet will be set properly at the start of the next round
-                    
+                 
                     # Calculate loss and check limits
                     loss = round(highest_cash - current_cash, 2)  # Round to 2 decimal places
                     if round(loss, 2) >= round(max_loss, 2):  # Round both values for comparison
