@@ -332,8 +332,8 @@ async def main():
     # START - Initialize starting cash (startup old recast relevant data)
     current_cash = round(starting_cash, 2)  # Round to 2 decimal places
     highest_cash = round(starting_cash, 2)  # Round to 2 decimal places
-    bet = round(0.1, 2)  # Round to 2 decimal places
-    highest_bet = round(0.1, 2)  # Initialize highest bet tracking
+    bet = round(selected_mode[0], 2)  # Round to 2 decimal places
+    highest_bet = round(selected_mode[0], 2)  # Initialize highest bet tracking
     picks = 0
     tries = 0
     rounds = 0
@@ -437,7 +437,7 @@ async def main():
                         picks = 0  # Reset picks for next round
 
                         #decrease bet down to minimum
-                        while bet > 0.1:
+                        while bet > selected_mode[0]:
                             await decrease_bet()
 
                         print(f"🎯 WIN! Bet reset to minimum: {format_money(bet)}")

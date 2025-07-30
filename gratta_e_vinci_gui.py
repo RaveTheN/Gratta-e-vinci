@@ -1012,8 +1012,15 @@ class GrattaEVinciGUI:
             await asyncio.sleep(0.05)
             pyautogui.click(lower_x, lower_y)
         
-        self.bet = round(0.1, 2)  # Ensure bet is set to minimum and rounded (same as playM.py)
-        self.log_message("🔽 Bet forced to minimum: 0.10")
+        # Get selected mode and use its first value as minimum bet (same as playM.py)
+        selected_mode_name = self.mode_var.get()
+        if selected_mode_name in self.betting_modes:
+            min_bet = self.betting_modes[selected_mode_name][0]
+        else:
+            min_bet = 0.1  # Fallback to 0.1 if mode not found
+        
+        self.bet = round(min_bet, 2)  # Ensure bet is set to minimum and rounded (same as playM.py)
+        self.log_message(f"🔽 Bet forced to minimum: {self.format_money(self.bet)}")
     
     async def click_tile(self, tile_number):
         """Click on a specific tile"""
@@ -1150,8 +1157,16 @@ class GrattaEVinciGUI:
         # Initialize variables for test
         self.current_cash = round(self.starting_cash_var.get(), 2)
         self.highest_cash = self.current_cash
-        self.bet = 0.1
-        self.highest_bet = 0.1
+        
+        # Get selected mode and use its first value as initial bet (same as playM.py)
+        selected_mode_name = self.mode_var.get()
+        if selected_mode_name in self.betting_modes:
+            initial_bet = self.betting_modes[selected_mode_name][0]
+        else:
+            initial_bet = 0.1  # Fallback to 0.1 if mode not found
+        
+        self.bet = round(initial_bet, 2)
+        self.highest_bet = round(initial_bet, 2)
         self.picks = 0
         self.tries = 0
         self.rounds = 0
@@ -1181,7 +1196,15 @@ class GrattaEVinciGUI:
                     
                     # Reset betting strategy after win
                     self.tries = 0
-                    self.bet = 0.1  # Reset bet on win
+                    
+                    # Get selected mode and use its first value as minimum bet (same as playM.py)
+                    selected_mode_name = self.mode_var.get()
+                    if selected_mode_name in self.betting_modes:
+                        min_bet = self.betting_modes[selected_mode_name][0]
+                    else:
+                        min_bet = 0.1  # Fallback to 0.1 if mode not found
+                    
+                    self.bet = round(min_bet, 2)  # Reset bet on win
                     self.log_message(f"🎯 WIN! Bet reset to minimum: {self.format_money(self.bet)}")
                 else:
                     self.log_message("💸 Test LOSS!")
@@ -1280,8 +1303,16 @@ class GrattaEVinciGUI:
         """Initialize game variables from GUI settings"""
         self.current_cash = round(self.starting_cash_var.get(), 2)
         self.highest_cash = self.current_cash
-        self.bet = 0.1
-        self.highest_bet = 0.1
+        
+        # Get selected mode and use its first value as initial bet (same as playM.py)
+        selected_mode_name = self.mode_var.get()
+        if selected_mode_name in self.betting_modes:
+            initial_bet = self.betting_modes[selected_mode_name][0]
+        else:
+            initial_bet = 0.1  # Fallback to 0.1 if mode not found
+        
+        self.bet = round(initial_bet, 2)
+        self.highest_bet = round(initial_bet, 2)
         self.picks = 0
         self.tries = 0
         self.rounds = 0
@@ -1452,8 +1483,15 @@ class GrattaEVinciGUI:
                         self.tries = 0
                         self.picks = 0
                         
+                        # Get selected mode and use its first value as minimum bet (same as playM.py)
+                        selected_mode_name = self.mode_var.get()
+                        if selected_mode_name in self.betting_modes:
+                            min_bet = self.betting_modes[selected_mode_name][0]
+                        else:
+                            min_bet = 0.1  # Fallback to 0.1 if mode not found
+                        
                         # Decrease bet down to minimum
-                        while self.bet > 0.1:
+                        while self.bet > min_bet:
                             await self.decrease_bet()
                         
                         self.log_message(f"🎯 WIN! Bet reset to minimum: {self.format_money(self.bet)}")
@@ -1534,8 +1572,15 @@ class GrattaEVinciGUI:
             self.current_cash += self.bet * 2.4
             self.tries = 0
             
+            # Get selected mode and use its first value as minimum bet (same as playM.py logic)
+            selected_mode_name = self.mode_var.get()
+            if selected_mode_name in self.betting_modes:
+                min_bet = self.betting_modes[selected_mode_name][0]
+            else:
+                min_bet = 0.1  # Fallback to 0.1 if mode not found
+            
             # Reset bet to minimum after win (same as playM.py logic)
-            while self.bet > 0.1:
+            while self.bet > min_bet:
                 # Simulate decrease_bet logic without actual clicking
                 current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
                 self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)
