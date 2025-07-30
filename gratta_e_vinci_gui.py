@@ -760,7 +760,7 @@ class GrattaEVinciGUI:
         instructions_frame = ttk.Frame(main_frame)
         instructions_frame.pack(fill=tk.X, pady=(0, 15))
         
-        instructions_text = "Edit betting mode arrays. Enter comma-separated positive numeric values:"
+        instructions_text = "Edit betting mode arrays. Enter comma-separated values from the allowed bet values only.\nClick 'Show Valid Values' to see all allowed bet amounts:"
         instructions = ttk.Label(instructions_frame, text=instructions_text, font=("TkDefaultFont", 10, "bold"))
         instructions.pack(pady=(0, 8))
         
@@ -824,10 +824,12 @@ class GrattaEVinciGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        # Configure button layout
+        # Configure button layout for 5 columns (including new Show Valid Values button)
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
         button_frame.grid_columnconfigure(2, weight=1)
+        button_frame.grid_columnconfigure(3, weight=1)
+        button_frame.grid_columnconfigure(4, weight=1)
         
         def validate_and_save():
             """Validate and save the betting modes"""
@@ -852,6 +854,8 @@ class GrattaEVinciGUI:
                                 val = float(val_str)
                                 if val < 0:
                                     errors.append(f"{mode_name}: Negative values not allowed ({val})")
+                                elif val not in self.bet_values:
+                                    errors.append(f"{mode_name}: Value {val} is not allowed. Must be one of: {', '.join(map(str, self.bet_values))}")
                                 else:
                                     values.append(round(val, 2))
                             except ValueError:
@@ -896,6 +900,14 @@ class GrattaEVinciGUI:
                         text_widget.delete("1.0", tk.END)
                         text_widget.insert(tk.END, ", ".join(str(val) for val in values))
         
+        def show_valid_values():
+            """Show a list of all valid bet values"""
+            valid_values_text = "Valid bet values that can be used in betting modes:\n\n"
+            valid_values_text += ", ".join(str(val) for val in self.bet_values)
+            valid_values_text += f"\n\nTotal: {len(self.bet_values)} allowed values"
+            valid_values_text += "\n\nNote: Only these exact values are allowed in betting mode arrays."
+            messagebox.showinfo("Valid Bet Values", valid_values_text)
+        
         def preview_mode():
             """Preview the selected mode values"""
             selected_mode = self.mode_var.get()
@@ -906,10 +918,17 @@ class GrattaEVinciGUI:
                 messagebox.showinfo("Preview", f"Selected mode: {selected_mode}\nValues: {text_widget.get('1.0', tk.END).strip()}")
         
         # Buttons with grid layout for better responsiveness
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
+        button_frame.grid_columnconfigure(2, weight=1)
+        button_frame.grid_columnconfigure(3, weight=1)
+        button_frame.grid_columnconfigure(4, weight=1)
+        
         ttk.Button(button_frame, text="💾 Save Changes", command=validate_and_save).grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
         ttk.Button(button_frame, text="🔄 Reset to Defaults", command=reset_to_defaults).grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
         ttk.Button(button_frame, text="👁️ Preview Selected", command=preview_mode).grid(row=0, column=2, padx=5, pady=5, sticky=tk.EW)
-        ttk.Button(button_frame, text="❌ Cancel", command=editor_window.destroy).grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
+        ttk.Button(button_frame, text="📋 Show Valid Values", command=show_valid_values).grid(row=0, column=3, padx=5, pady=5, sticky=tk.EW)
+        ttk.Button(button_frame, text="❌ Cancel", command=editor_window.destroy).grid(row=1, column=2, padx=5, pady=5, sticky=tk.EW)
         
         # Center the window on screen
         editor_window.update_idletasks()
