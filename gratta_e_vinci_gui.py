@@ -60,6 +60,9 @@ class GrattaEVinciGUI:
             "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 15.0, 20.0]
         }
         
+        # Valid bet values that can be used in betting modes
+        self.bet_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.5, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 25.0]
+        
         # Create GUI
         self.create_widgets()
         self.load_settings()
@@ -209,31 +212,40 @@ class GrattaEVinciGUI:
     
     def create_settings_coordinates_tab(self, parent):
         """Combined Settings and Coordinates tab"""
-        # Create scrollable container
-        canvas = tk.Canvas(parent, highlightthickness=0)
+        # Create scrollable container with optimized settings
+        canvas = tk.Canvas(parent, highlightthickness=0, bd=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
         
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        # Optimize scroll region updates
+        def configure_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        scrollable_frame.bind("<Configure>", configure_scroll_region)
+        
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Make canvas window responsive to parent width
+        def configure_canvas_width(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind('<Configure>', configure_canvas_width)
         
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Add mouse wheel scrolling with error handling
+        # Add optimized mouse wheel scrolling
         def on_mousewheel(event):
             try:
-                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+                # Only scroll if scrollbar is visible and canvas exists
+                if scrollbar.winfo_viewable() and canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1*(event.delta/120)), "units")
             except tk.TclError:
-                # Canvas has been destroyed, ignore the error
                 pass
         
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        # Bind to canvas instead of all widgets for better performance
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        scrollable_frame.bind("<MouseWheel>", on_mousewheel)
         
         # Main container within scrollable frame
         main_container = ttk.Frame(scrollable_frame)
@@ -247,9 +259,10 @@ class GrattaEVinciGUI:
         game_frame = ttk.LabelFrame(settings_main_frame, text="Game Configuration", padding=10)
         game_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Configure grid weights for better expansion
-        for i in range(4):
-            game_frame.grid_columnconfigure(i, weight=1)
+        # Configure grid weights for better expansion (batch configure)
+        grid_weights = [1, 1, 1, 1]
+        for i, weight in enumerate(grid_weights):
+            game_frame.grid_columnconfigure(i, weight=weight)
         
         # Starting Cash
         ttk.Label(game_frame, text="Starting Cash:").grid(row=0, column=0, sticky=tk.W, pady=3, padx=5)
@@ -295,9 +308,10 @@ class GrattaEVinciGUI:
         control_frame = ttk.LabelFrame(settings_main_frame, text="Control Points", padding=10)
         control_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Configure grid weights
-        for i in range(6):
-            control_frame.grid_columnconfigure(i, weight=1)
+        # Configure grid weights (batch configure)
+        grid_weights = [1, 1, 1, 1, 1, 1]
+        for i, weight in enumerate(grid_weights):
+            control_frame.grid_columnconfigure(i, weight=weight)
         
         # Play/Collect Button
         ttk.Label(control_frame, text="Play/Collect:").grid(row=0, column=0, sticky=tk.W, pady=3, padx=3)
@@ -395,16 +409,20 @@ class GrattaEVinciGUI:
         ttk.Button(quick_frame, text="🎯 Test Click Tile 1", command=lambda: self.test_click_tile(1)).pack(side=tk.LEFT, padx=5)
     
     def create_betting_modes_tab(self, parent):
+        # Create main container directly without scrollable canvas for better responsiveness
+        main_container = ttk.Frame(parent)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
         # Header frame
-        header_frame = ttk.Frame(parent)
-        header_frame.pack(fill=tk.X, padx=5, pady=5)
+        header_frame = ttk.Frame(main_container)
+        header_frame.pack(fill=tk.X, pady=(0, 5))
         
         ttk.Label(header_frame, text="Betting Mode Configuration", font=("TkDefaultFont", 12, "bold")).pack()
         ttk.Label(header_frame, text="Customize betting strategies for different risk levels", font=("TkDefaultFont", 9)).pack(pady=(0, 10))
         
         # Current mode selection frame
-        selection_frame = ttk.LabelFrame(parent, text="Current Mode Selection", padding=10)
-        selection_frame.pack(fill=tk.X, padx=5, pady=5)
+        selection_frame = ttk.LabelFrame(main_container, text="Current Mode Selection", padding=10)
+        selection_frame.pack(fill=tk.X, pady=(0, 5))
         
         mode_select_frame = ttk.Frame(selection_frame)
         mode_select_frame.pack(fill=tk.X)
@@ -419,22 +437,32 @@ class GrattaEVinciGUI:
         ttk.Button(mode_select_frame, text="🔄 Refresh Preview", command=self.update_betting_preview).pack(side=tk.LEFT, padx=5)
         
         # Preview frame
-        preview_frame = ttk.LabelFrame(parent, text="Current Mode Preview", padding=10)
-        preview_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        preview_frame = ttk.LabelFrame(main_container, text="Current Mode Preview", padding=10)
+        preview_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
         
         # Create text widget for preview
         self.betting_preview_text = scrolledtext.ScrolledText(preview_frame, height=12, width=80, state=tk.DISABLED)
         self.betting_preview_text.pack(fill=tk.BOTH, expand=True)
         
-        # Action buttons frame
-        action_frame = ttk.Frame(parent)
-        action_frame.pack(fill=tk.X, padx=5, pady=10)
+        # Action buttons frame with better layout
+        action_frame = ttk.Frame(main_container)
+        action_frame.pack(fill=tk.X, pady=(5, 0))
         
-        ttk.Button(action_frame, text="✏️ Edit Betting Modes", command=self.open_betting_mode_editor).pack(side=tk.LEFT, padx=5)
-        ttk.Button(action_frame, text="📊 Analyze Modes", command=self.analyze_betting_modes).pack(side=tk.LEFT, padx=5)
-        ttk.Button(action_frame, text="🔄 Reset to Defaults", command=self.reset_betting_modes).pack(side=tk.LEFT, padx=5)
-        ttk.Button(action_frame, text="📤 Export Modes", command=self.export_betting_modes).pack(side=tk.LEFT, padx=5)
-        ttk.Button(action_frame, text="📥 Import Modes", command=self.import_betting_modes).pack(side=tk.LEFT, padx=5)
+        # Configure button grid for responsive layout
+        action_frame.grid_columnconfigure(0, weight=1)
+        action_frame.grid_columnconfigure(1, weight=1)
+        action_frame.grid_columnconfigure(2, weight=1)
+        action_frame.grid_columnconfigure(3, weight=1)
+        action_frame.grid_columnconfigure(4, weight=1)
+        
+        # Top row buttons
+        ttk.Button(action_frame, text="✏️ Edit Betting Modes", command=self.open_betting_mode_editor).grid(row=0, column=0, padx=2, pady=2, sticky=tk.EW)
+        ttk.Button(action_frame, text="📊 Analyze Modes", command=self.analyze_betting_modes).grid(row=0, column=1, padx=2, pady=2, sticky=tk.EW)
+        ttk.Button(action_frame, text="🔄 Reset to Defaults", command=self.reset_betting_modes).grid(row=0, column=2, padx=2, pady=2, sticky=tk.EW)
+        
+        # Bottom row buttons
+        ttk.Button(action_frame, text="📤 Export Modes", command=self.export_betting_modes).grid(row=1, column=0, padx=2, pady=2, sticky=tk.EW)
+        ttk.Button(action_frame, text="📥 Import Modes", command=self.import_betting_modes).grid(row=1, column=1, padx=2, pady=2, sticky=tk.EW)
         
         # Initial preview update
         self.root.after(100, self.update_betting_preview)
@@ -553,12 +581,24 @@ class GrattaEVinciGUI:
     def reset_betting_modes(self):
         """Reset betting modes to defaults"""
         if messagebox.askyesno("Reset Betting Modes", "Reset all betting modes to default values?"):
-            self.betting_modes = {
+            # Ensure default modes only use values from bet_values
+            default_modes = {
                 "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
                 "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 15.0, 20.0],
                 "high": [0.2, 0.3, 0.6, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0],
                 "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 15.0, 20.0]
             }
+            
+            # Validate that all default values are in bet_values
+            for mode_name, values in default_modes.items():
+                invalid_values = [v for v in values if v not in self.bet_values]
+                if invalid_values:
+                    messagebox.showerror("Default Mode Error", 
+                                       f"Default mode '{mode_name}' contains invalid values: {invalid_values}\n"
+                                       f"Please update the default modes to use only valid bet values.")
+                    return
+            
+            self.betting_modes = default_modes
             self.update_betting_preview()
             messagebox.showinfo("Reset Complete", "Betting modes reset to defaults!")
     
@@ -705,90 +745,89 @@ class GrattaEVinciGUI:
         """Open the betting mode editor window"""
         editor_window = tk.Toplevel(self.root)
         editor_window.title("Betting Mode Editor")
-        editor_window.geometry("800x600")
+        editor_window.geometry("900x700")  # Larger default size
         editor_window.resizable(True, True)
         
         # Make window modal
         editor_window.transient(self.root)
         editor_window.grab_set()
         
-        # Create scrollable container
-        canvas = tk.Canvas(editor_window, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(editor_window, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Add mouse wheel scrolling with error handling
-        def on_mousewheel(event):
-            try:
-                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            except tk.TclError:
-                # Canvas has been destroyed, unbind the event
-                try:
-                    canvas.unbind_all("<MouseWheel>")
-                except:
-                    pass
-        
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
-        
-        # Unbind mouse wheel when window is destroyed
-        def on_window_destroy():
-            try:
-                canvas.unbind_all("<MouseWheel>")
-            except:
-                pass
-            editor_window.destroy()
-        
-        editor_window.protocol("WM_DELETE_WINDOW", on_window_destroy)
-        
-        canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
-        scrollbar.pack(side="right", fill="y")
-        
-        # Main frame within scrollable area
-        main_frame = ttk.Frame(scrollable_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Create main container directly without scrollable canvas for better responsiveness
+        main_frame = ttk.Frame(editor_window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # Instructions
-        instructions = ttk.Label(main_frame, 
-                                text="Edit betting mode arrays. Enter comma-separated values (e.g., 0.1, 0.2, 0.5, 1.0)",
-                                font=("TkDefaultFont", 9))
-        instructions.pack(pady=(0, 10))
+        instructions_frame = ttk.Frame(main_frame)
+        instructions_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        instructions_text = "Edit betting mode arrays. Enter comma-separated positive numeric values:"
+        instructions = ttk.Label(instructions_frame, text=instructions_text, font=("TkDefaultFont", 10, "bold"))
+        instructions.pack(pady=(0, 8))
+        
+        # Create scrollable frame for betting modes with scrollbar but no mousewheel
+        modes_frame = ttk.Frame(main_frame)
+        modes_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        # Create canvas and scrollbar for modes (without mousewheel events)
+        canvas = tk.Canvas(modes_frame, highlightthickness=0)  # No fixed height - let it expand
+        scrollbar = ttk.Scrollbar(modes_frame, orient="vertical", command=canvas.yview)
+        scrollable_modes_frame = ttk.Frame(canvas)
+        
+        # Configure scroll region when content changes
+        def configure_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Update canvas window width to match canvas width
+            canvas_width = canvas.winfo_width()
+            if canvas_width > 1:  # Ensure canvas is properly initialized
+                canvas.itemconfig(canvas_window, width=canvas_width)
+        
+        scrollable_modes_frame.bind("<Configure>", configure_scroll_region)
+        
+        canvas_window = canvas.create_window((0, 0), window=scrollable_modes_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Make canvas responsive to width changes
+        def configure_canvas_width(event):
+            if canvas.winfo_exists() and canvas.winfo_children():
+                canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind('<Configure>', configure_canvas_width)
+        
+        # Note: Mousewheel scrolling intentionally removed for better responsiveness
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
         
         # Dictionary to store text widgets for each mode
         mode_text_widgets = {}
         
-        # Create editor for each betting mode
-        for mode_name, mode_values in self.betting_modes.items():
-            # Mode frame
-            mode_frame = ttk.LabelFrame(main_frame, text=f"{mode_name.title()} Mode", padding=10)
-            mode_frame.pack(fill=tk.X, pady=5)
+        # Create editor for each betting mode with better layout
+        for i, (mode_name, mode_values) in enumerate(self.betting_modes.items()):
+            # Mode frame with better styling
+            mode_frame = ttk.LabelFrame(scrollable_modes_frame, text=f"🎯 {mode_name.title()} Mode", padding=15)
+            mode_frame.pack(fill=tk.X, pady=8, padx=5)
             
-            # Current values display
+            # Current values display with better formatting
             current_text = ", ".join(str(val) for val in mode_values)
-            ttk.Label(mode_frame, text=f"Current ({len(mode_values)} values):").pack(anchor=tk.W)
+            info_frame = ttk.Frame(mode_frame)
+            info_frame.pack(fill=tk.X, pady=(0, 10))
             
-            # Text widget for editing
-            text_widget = tk.Text(mode_frame, height=3, width=80, wrap=tk.WORD)
+            ttk.Label(info_frame, text=f"Current ({len(mode_values)} values):", font=("TkDefaultFont", 9, "bold")).pack(side=tk.LEFT)
+            ttk.Label(info_frame, text=f"Total Risk: {sum(mode_values):.1f}", font=("TkDefaultFont", 8), foreground="blue").pack(side=tk.RIGHT)
+            
+            # Text widget for editing with proper height
+            text_widget = tk.Text(mode_frame, height=4, width=70, wrap=tk.WORD, font=("TkDefaultFont", 9))
             text_widget.pack(fill=tk.X, pady=(5, 0))
             text_widget.insert(tk.END, current_text)
             mode_text_widgets[mode_name] = text_widget
-            
-            # Add scrollbar to text widget
-            scrollbar = ttk.Scrollbar(text_widget)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            text_widget.config(yscrollcommand=scrollbar.set)
-            scrollbar.config(command=text_widget.yview)
         
-        # Buttons frame
+        # Buttons frame outside scrollable area
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        # Configure button layout
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
+        button_frame.grid_columnconfigure(2, weight=1)
         
         def validate_and_save():
             """Validate and save the betting modes"""
@@ -813,8 +852,6 @@ class GrattaEVinciGUI:
                                 val = float(val_str)
                                 if val < 0:
                                     errors.append(f"{mode_name}: Negative values not allowed ({val})")
-                                elif val > 1000:
-                                    errors.append(f"{mode_name}: Values above 1000 not recommended ({val})")
                                 else:
                                     values.append(round(val, 2))
                             except ValueError:
@@ -868,13 +905,13 @@ class GrattaEVinciGUI:
                 text_widget.tag_add(tk.SEL, "1.0", tk.END)
                 messagebox.showinfo("Preview", f"Selected mode: {selected_mode}\nValues: {text_widget.get('1.0', tk.END).strip()}")
         
-        # Buttons
-        ttk.Button(button_frame, text="💾 Save Changes", command=validate_and_save).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="🔄 Reset to Defaults", command=reset_to_defaults).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="👁️ Preview Selected", command=preview_mode).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="❌ Cancel", command=editor_window.destroy).pack(side=tk.RIGHT, padx=5)
+        # Buttons with grid layout for better responsiveness
+        ttk.Button(button_frame, text="💾 Save Changes", command=validate_and_save).grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
+        ttk.Button(button_frame, text="🔄 Reset to Defaults", command=reset_to_defaults).grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        ttk.Button(button_frame, text="👁️ Preview Selected", command=preview_mode).grid(row=0, column=2, padx=5, pady=5, sticky=tk.EW)
+        ttk.Button(button_frame, text="❌ Cancel", command=editor_window.destroy).grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
         
-        # Center the window
+        # Center the window on screen
         editor_window.update_idletasks()
         x = (editor_window.winfo_screenwidth() - editor_window.winfo_width()) // 2
         y = (editor_window.winfo_screenheight() - editor_window.winfo_height()) // 2
