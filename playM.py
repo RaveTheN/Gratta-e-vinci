@@ -4,6 +4,7 @@ import pyautogui
 # import cv2          # Comment out for now  
 # import numpy as np  # Comment out for now
 import random
+from pynput import keyboard
 
 # Configure mouse speed (pyautogui uses duration for speed control)
 pyautogui.PAUSE = 0.1  # Pause between pyautogui calls
@@ -64,6 +65,7 @@ starting_cash = round(2001.50, 2)  # Round to 2 decimal places
 current_cash = round(0, 2)  # Round to 2 decimal places
 highest_cash = round(0, 2)  # Round to 2 decimal places
 bet = round(0.1, 2)  # Round to 2 decimal places
+highest_bet = round(0.1, 2)  # Track highest bet placed
 picks = 0
 tries = 0
 rounds = 0
@@ -76,6 +78,9 @@ max_picks = 3
 target_win = round(2100, 2)  # Round to 2 decimal places
 wait_selected = False
 bet_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,1.2,1.4,1.5,1.6,1.8,2.0,2.5,3.0,3.5,4.0,4.5,5.0,6.0,7.0,8.0,9.0,10.0,12.0,14.0,16.0,18.0,20.0,25.0]
+
+# Escape key detection
+escape_pressed = False
 
 # Multiplier for bet increase
 multiplier = round(2.4, 2)  # Round to 2 decimal places
@@ -110,6 +115,22 @@ async def random_await():
 def format_money(value):
     """Format a number to always show exactly 2 decimal places"""
     return f"{round(value, 2):.2f}"
+
+# Function to handle escape key press
+def on_key_press(key):
+    global escape_pressed
+    if key == keyboard.Key.esc:
+        print("\n🛑 ESCAPE key pressed - stopping game...")
+        escape_pressed = True
+        return False  # Stop the listener
+
+# Function to start keyboard listener
+def start_keyboard_listener():
+    global escape_pressed
+    escape_pressed = False
+    listener = keyboard.Listener(on_press=on_key_press)
+    listener.start()
+    return listener
 
 # Function to increase bet
 async def increase_bet():
@@ -266,7 +287,7 @@ def is_color_in_range_red(color, target_color, tolerance=50):
 
 # Function to log the current state
 def log_state():
-    print(f"Current cash: {format_money(current_cash)}, Highest cash: {format_money(highest_cash)}, Bet: {format_money(bet)}, Picks: {picks}, Tries: {tries}, Rounds: {rounds}")
+    print(f"Current cash: {format_money(current_cash)}, Highest cash: {format_money(highest_cash)}, Bet: {format_money(bet)}, Highest bet: {format_money(highest_bet)}, Picks: {picks}, Tries: {tries}, Rounds: {rounds}")
 
 # Function to save new highest cash
 async def save_new_highest_cash():
@@ -275,10 +296,20 @@ async def save_new_highest_cash():
         highest_cash = round(current_cash, 2)  # Round to 2 decimal places
         print(f"New highest cash saved: {format_money(highest_cash)}")
 
+# Function to update highest bet
+def update_highest_bet():
+    global highest_bet, bet
+    if bet > highest_bet:
+        highest_bet = round(bet, 2)  # Round to 2 decimal places
+        print(f"🎯 New highest bet recorded: {format_money(highest_bet)}")
+
 
 #Main function to run the game logic  
 async def main():
-    global current_cash, highest_cash, bet, picks, tries, rounds, loss, multiplier, max_loss, max_rounds, max_picks, target_win, wait_selected, selected_mode
+    global current_cash, highest_cash, bet, highest_bet, picks, tries, rounds, loss, multiplier, max_loss, max_rounds, max_picks, target_win, wait_selected, selected_mode, escape_pressed
+
+    # Start keyboard listener for escape key detection
+    keyboard_listener = start_keyboard_listener()
 
     #if max picks is not set, default to 3
     if max_picks <= 0:
@@ -302,6 +333,7 @@ async def main():
     current_cash = round(starting_cash, 2)  # Round to 2 decimal places
     highest_cash = round(starting_cash, 2)  # Round to 2 decimal places
     bet = round(0.1, 2)  # Round to 2 decimal places
+    highest_bet = round(0.1, 2)  # Initialize highest bet tracking
     picks = 0
     tries = 0
     rounds = 0
@@ -317,6 +349,11 @@ async def main():
 
     # Main game loop
     while True:
+        # Check for escape key press
+        if escape_pressed:
+            print("🛑 Game stopped by escape key")
+            break
+            
         # Check if we've reached target or max rounds
         if rounds >= max_rounds:
             print("Reached maximum rounds!")
@@ -344,11 +381,17 @@ async def main():
         
         # Press play to start the round and immediately deduct cash
         await play_or_collect()
-        await decrease_cash()  # Deduct bet amount immediately when starting round
         print(f"Started new round {rounds + 1} with bet: {format_money(bet)} - Cash deducted")
+        await decrease_cash()  # Deduct bet amount immediately when starting round
         
         # Keep picking tiles until we get 3 blues (win) or 1 red (lose)
         while round_active and picks < max_picks:
+            # Check for escape key press during round
+            if escape_pressed:
+                print("🛑 Game stopped by escape key during round")
+                round_active = False
+                break
+                
             # Generate random tile number
             generate_random_tile()
             
@@ -416,23 +459,24 @@ async def main():
                     # Cash already deducted when round started, just update strategy
                     increase_tries()
 
-                    print(f"New bet amount from mode array: {selected_mode[tries]}")
+                    # Reset picks and end round
+                    picks = 0
+                    round_active = False
+                    
+                    log_state()
+                    
+                    # Now update betting strategy after showing round results
+                    print(f"Bet set from mode array: {format_money(selected_mode[tries])}")
                     while bet < selected_mode[tries]:
                         await increase_bet()
+                    update_highest_bet()  # Track highest bet after increase
                     print(f"💸 LOSS! Bet increased to: {format_money(bet)} (try #{tries})")
-                    
                  
                     # Calculate loss and check limits
                     loss = round(highest_cash - current_cash, 2)  # Round to 2 decimal places
                     if round(loss, 2) >= round(max_loss, 2):  # Round both values for comparison
                         print("Reached maximum loss!")
                         break
-                    
-                    # Reset picks and end round
-                    picks = 0
-                    round_active = False
-                    
-                    log_state()
                     
                 else:
                     # Unknown color detected - retry after waiting
@@ -454,20 +498,23 @@ async def main():
         # Round completed, increment round counter
         increase_rounds()
     
+    # Cleanup keyboard listener
+    keyboard_listener.stop()
+    
     print("=== GAME END ===")
-    print(f"Final stats - Cash: {format_money(current_cash)}, Highest: {format_money(highest_cash)}, Rounds: {rounds}, Loss: {format_money(loss)}")
+    print(f"Final stats - Cash: {format_money(current_cash)}, Highest: {format_money(highest_cash)}, Highest bet: {format_money(highest_bet)}, Rounds: {rounds}, Loss: {format_money(loss)}")
 
 if __name__ == "__main__":
     print("🎰 Starting Gratta-e-Vinci Automation")
     print("⚠️  WARNING: This will control your mouse and keyboard!")
     print("   Make sure your game window is positioned correctly.")
-    print("   Press Ctrl+C or move mouse to top-left corner to stop.")
+    print("   Press ESCAPE key or Ctrl+C to stop, or move mouse to top-left corner.")
     
     try:
         import asyncio
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n🛑 Game stopped by user")
+        print("\n🛑 Game stopped by user (Ctrl+C)")
     except Exception as e:
         print(f"\n❌ Error occurred: {e}")
         import traceback

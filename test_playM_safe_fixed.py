@@ -1,5 +1,5 @@
 """
-Safe test version of playM.py - No actual mouse clicks
+Safe test version of playM.py - No actual mouse clicks with highest bet tracking
 This version simulates the game logic without performing real mouse actions
 """
 import asyncio
@@ -8,19 +8,10 @@ from pynput import keyboard
 
 class Point:
     def __init__(self, x, y):
-          print("\n🏆 === TEST COMPLETED ===")
-    print(f"Final Results:")
-    print(f"💰 Final Cash: {format_money(current_cash)}")
-    print(f"📈 Highest Cash: {format_money(highest_cash)}")
-    print(f"🔝 Highest Bet: {format_money(highest_bet)}")
-    print(f"🏁 Rounds Completed: {rounds}")
-    print(f"📉 Total Loss: {format_money(loss)}")
-    print(f"🎯 Final Picks: {picks}")
-    print(f"🔄 Final Tries: {tries}")= x
+        self.x = x
         self.y = y
     
     def __repr__(self):
-        return f"Point({self.x}, {self.y})"
         return f"Point({self.x}, {self.y})"
 
 def format_money(value):
@@ -62,16 +53,13 @@ target_win = 100
 # Escape key detection
 escape_pressed = False
 
-modes = {
-    "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-    "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 15.0, 20.0]
-}
-selected_mode = modes["safe"]
+# Game mode
 multiplier = 2.4
+selected_mode = [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0]
 
-# Simulate mouse actions (no actual clicking)
 async def simulate_click(point, action_name):
-    await asyncio.sleep(0.1)  # Simulate delay
+    """Simulate a mouse click"""
+    await asyncio.sleep(0.1)
     print(f"[SIMULATED] {action_name} at {point}")
 
 async def simulate_color_check():
@@ -163,9 +151,8 @@ async def test_main_game_logic():
             print("💀 Insufficient cash for bet!")
             break
 
-        print(f"\n=== Round {rounds + 1} ===")
-        
         # Start new round
+        print(f"\n=== Round {rounds + 1} ===")
         picks = 0
         test_empty_randoms()
         round_active = True
@@ -202,20 +189,11 @@ async def test_main_game_logic():
                     
                     if picks >= max_picks:
                         print("🎊 THREE BLUES - ROUND WON!")
-                        
-                        # Collect winnings
                         await simulate_click(Point(1581, 849), "COLLECT WINNINGS")
                         await test_increase_cash()
-                        
-                        # Reset betting strategy after win - back to minimum bet
-                        tries = 0  # Reset tries counter
-                        bet = round(0.1, 2)  # Reset bet to minimum
-                        print(f"🎯 WIN! Bet reset to minimum: {format_money(bet)}")
-                        
-                        # Reset for next round
-                        picks = 0
+                        tries = 0  # Reset tries on win
                         round_active = False
-                        
+                        print("🎯 WIN! Bet reset to minimum: 0.10")
                     else:
                         print(f"🎯 Got {picks} blue(s), need {max_picks - picks} more...")
                         
@@ -266,8 +244,8 @@ async def test_main_game_logic():
     print(f"Final Results:")
     print(f"💰 Final Cash: {format_money(current_cash)}")
     print(f"📈 Highest Cash: {format_money(highest_cash)}")
-    print(f"� Highest Bet: {format_money(highest_bet)}")
-    print(f"�🏁 Rounds Completed: {rounds}")
+    print(f"🔝 Highest Bet: {format_money(highest_bet)}")
+    print(f"🏁 Rounds Completed: {rounds}")
     print(f"📉 Total Loss: {format_money(loss)}")
     print(f"🎯 Final Picks: {picks}")
     print(f"🔄 Final Tries: {tries}")
