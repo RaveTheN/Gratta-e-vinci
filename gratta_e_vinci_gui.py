@@ -102,6 +102,13 @@ class GrattaEVinciGUI:
         self.create_stats_tab(stats_frame)
     
     def create_settings_tab(self, parent):
+        # Mouse coordinates display in settings
+        coord_frame = ttk.LabelFrame(parent, text="Mouse Coordinates", padding=10)
+        coord_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.settings_coord_label = ttk.Label(coord_frame, text="Mouse Position: (0, 0)", font=("Courier", 12))
+        self.settings_coord_label.pack(pady=5)
+        
         # Game Settings Frame
         game_frame = ttk.LabelFrame(parent, text="Game Settings", padding=10)
         game_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -170,7 +177,7 @@ class GrattaEVinciGUI:
         self.lower_y_var = tk.IntVar(value=1740)
         ttk.Entry(control_frame, textvariable=self.lower_x_var, width=8).grid(row=1, column=1, padx=2, pady=2)
         ttk.Entry(control_frame, textvariable=self.lower_y_var, width=8).grid(row=1, column=2, padx=2, pady=2)
-        
+
         # Buttons
         button_frame = ttk.Frame(parent)
         button_frame.pack(fill=tk.X, padx=5, pady=10)
@@ -796,7 +803,13 @@ class GrattaEVinciGUI:
         while self.mouse_monitoring:
             try:
                 x, y = pyautogui.position()
-                self.root.after(0, lambda: self.coord_label.config(text=f"Mouse Position: ({x}, {y})"))
+                coord_text = f"Mouse Position: ({x}, {y})"
+                
+                # Update both coordinate displays
+                self.root.after(0, lambda: self.coord_label.config(text=coord_text))
+                if hasattr(self, 'settings_coord_label'):
+                    self.root.after(0, lambda: self.settings_coord_label.config(text=coord_text))
+                
                 time.sleep(0.1)
             except:
                 break
