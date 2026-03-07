@@ -75,6 +75,7 @@ loss = round(0, 2)  # Round to 2 decimal places
 max_loss = round(10, 2)  # Round to 2 decimal places
 max_rounds = 100
 max_picks = 3
+difficulty = "medium"
 target_win = round(2100, 2)  # Round to 2 decimal places
 wait_selected = False
 bet_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,1.2,1.4,1.5,1.6,1.8,2.0,2.5,3.0,3.5,4.0,4.5,5.0,6.0,7.0,8.0,9.0,10.0,12.0,14.0,16.0,18.0,20.0,25.0]
@@ -83,7 +84,7 @@ bet_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,1.2,1.4,1.5,1.6,1
 escape_pressed = False
 
 # Multiplier for bet increase
-multiplier = round(2.4, 2)  # Round to 2 decimal places
+multiplier = round(2.4, 2)  # Default: medium difficulty with 3 picks
 
 #Modes
 
@@ -96,7 +97,22 @@ modes={
 
 selected_mode = modes["normal"]  # Default mode
 
+# Win multiplier lookup by difficulty and picks
+win_multipliers = {
+    "low": {1: 1.1, 2: 1.3, 3: 1.5, 4: 1.7},
+    "medium": {1: 1.3, 2: 1.8, 3: 2.4, 4: 3.6},
+    "high": {1: 1.6, 2: 2.7, 3: 4.8, 4: 8.7},
+}
+
 # Functions
+
+def get_win_multiplier(selected_difficulty, picks):
+    difficulty_key = str(selected_difficulty).lower()
+    if difficulty_key not in win_multipliers:
+        raise ValueError(f"Invalid difficulty '{selected_difficulty}'. Expected low, medium or high")
+    if picks not in win_multipliers[difficulty_key]:
+        raise ValueError(f"Invalid picks '{picks}'. Expected one of {list(win_multipliers[difficulty_key].keys())}")
+    return round(win_multipliers[difficulty_key][picks], 2)
 
 # Sleep function
 async def sleep(seconds):
@@ -306,7 +322,7 @@ def update_highest_bet():
 
 #Main function to run the game logic  
 async def main():
-    global current_cash, highest_cash, bet, highest_bet, picks, tries, rounds, loss, multiplier, max_loss, max_rounds, max_picks, target_win, wait_selected, selected_mode, escape_pressed
+    global current_cash, highest_cash, bet, highest_bet, picks, tries, rounds, loss, multiplier, max_loss, max_rounds, max_picks, difficulty, target_win, wait_selected, selected_mode, escape_pressed
 
     # Start keyboard listener for escape key detection
     keyboard_listener = start_keyboard_listener()
@@ -314,6 +330,8 @@ async def main():
     #if max picks is not set, default to 3
     if max_picks <= 0:
         max_picks = 3
+    elif max_picks > 4:
+        max_picks = 4
     
     # If max rounds is not set, default to 100
     if max_rounds <= 0:
@@ -323,11 +341,14 @@ async def main():
     if max_loss <= 0:
         max_loss = 10
 
-    # If max picks is 2 set multipliter to 1.8, if 3 set to 2.4
-    if max_picks == 2:
-        multiplier = round(1.8, 2)
-    elif max_picks == 3:
-        multiplier = round(2.4, 2)
+    # Determine win multiplier by difficulty and picks
+    difficulty = str(difficulty).lower()
+    if difficulty not in win_multipliers:
+        print(f"⚠️ Invalid difficulty '{difficulty}', falling back to 'medium'")
+        difficulty = "medium"
+
+    multiplier = get_win_multiplier(difficulty, max_picks)
+    print(f"Using win multiplier {multiplier:.2f}x (difficulty={difficulty}, picks={max_picks})")
 
     # START - Initialize starting cash (startup old recast relevant data)
     current_cash = round(starting_cash, 2)  # Round to 2 decimal places

@@ -13,6 +13,14 @@ from pynput import keyboard
 import json
 import os
 
+WIN_MULTIPLIERS = {
+    "low": {1: 1.1, 2: 1.3, 3: 1.5, 4: 1.7},
+    "medium": {1: 1.3, 2: 1.8, 3: 2.4, 4: 3.6},
+    "high": {1: 1.6, 2: 2.7, 3: 4.8, 4: 8.7},
+}
+
+GRINDING_STEP = {"b": 20.0, "p": 3, "d": "high"}
+
 class Point:
     def __init__(self, x, y):
         self.x = x
@@ -45,6 +53,10 @@ class GrattaEVinciGUI:
         self.loss = 0
         self.total_win = 0  # Add this line
         self.randoms = []
+        self.grinding_active = False
+        self.grinding_saved_balance = None
+        self.current_difficulty = None  # Traccia la difficoltà attualmente impostata in gioco
+        self.init_steps = [{"action": "set_bet_min"}]
         
         # Target colors
         self.target_blue = {"r": 1, "g": 108, "b": 238}
@@ -56,13 +68,35 @@ class GrattaEVinciGUI:
         # Betting modes - initialize with default values
         self.betting_modes = {
             "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-            "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 15.0, 20.0],
+            "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 16.0, 20.0],
             "high": [0.2, 0.3, 0.6, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0],
-            "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 15.0, 20.0]
+            "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0]
         }
-        
+
+        # Custom betting mode: each step has bet (b), picks (p), difficulty (d)
+        self.custom_mode = [
+            {"b": 0.1, "p": 2, "d": "low"},
+        ]
+
         # Valid bet values that can be used in betting modes
         self.bet_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.5, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 25.0]
+
+        # Pause configurabili
+        self.sleep_play_or_collect_var = tk.DoubleVar(value=1.0)
+        self.sleep_increase_bet_var = tk.DoubleVar(value=1.0)
+        self.sleep_decrease_bet_var = tk.DoubleVar(value=1.0)
+        self.sleep_decrease_bet_force_var = tk.DoubleVar(value=0.05)
+        self.sleep_decrease_diff_force_var = tk.DoubleVar(value=0.05)
+        self.sleep_set_difficulty_var = tk.DoubleVar(value=0.5)
+        self.sleep_click_tile_var = tk.DoubleVar(value=1.0)
+        self.sleep_after_play_var = tk.DoubleVar(value=1.0)
+        self.sleep_after_tile_click_var = tk.DoubleVar(value=1.0)
+        self.sleep_between_rounds_var = tk.DoubleVar(value=1.0)
+        self.sleep_after_result_var = tk.DoubleVar(value=2.0)
+        self.sleep_color_retry_var = tk.DoubleVar(value=1.0)
+        self.sleep_init_raise_diff_var = tk.DoubleVar(value=0.4)
+        self.sleep_init_lower_diff_var = tk.DoubleVar(value=0.4)
+        self.sleep_init_click_var = tk.DoubleVar(value=0.3)
         
         # Create GUI
         self.create_widgets()
@@ -70,6 +104,15 @@ class GrattaEVinciGUI:
         
         # Start mouse coordinate monitoring
         self.start_mouse_monitoring()
+
+    def get_win_multiplier(self, difficulty, picks):
+        """Resolve win multiplier from difficulty and picks."""
+        difficulty_key = str(difficulty).lower()
+        if difficulty_key not in WIN_MULTIPLIERS:
+            raise ValueError(f"Invalid difficulty '{difficulty}'")
+        if picks not in WIN_MULTIPLIERS[difficulty_key]:
+            raise ValueError(f"Invalid picks '{picks}' for difficulty '{difficulty_key}'")
+        return round(WIN_MULTIPLIERS[difficulty_key][picks], 2)
     
     def create_widgets(self):
         # Main notebook for tabs
@@ -90,7 +133,12 @@ class GrattaEVinciGUI:
         betting_frame = ttk.Frame(notebook)
         notebook.add(betting_frame, text="Betting Modes")
         self.create_betting_modes_tab(betting_frame)
-        
+
+        # Initialization Steps Tab
+        init_frame = ttk.Frame(notebook)
+        notebook.add(init_frame, text="Inizializzazione")
+        self.create_init_steps_tab(init_frame)
+
         # Game Control Tab
         control_frame = ttk.Frame(notebook)
         notebook.add(control_frame, text="Game Control")
@@ -100,6 +148,11 @@ class GrattaEVinciGUI:
         stats_frame = ttk.Frame(notebook)
         notebook.add(stats_frame, text="Statistics")
         self.create_stats_tab(stats_frame)
+
+        # Pauses Tab
+        pauses_frame = ttk.Frame(notebook)
+        notebook.add(pauses_frame, text="Pause")
+        self.create_pauses_tab(pauses_frame)
     
     def create_settings_tab(self, parent):
         # Mouse coordinates display in settings
@@ -134,24 +187,40 @@ class GrattaEVinciGUI:
         ttk.Entry(game_frame, textvariable=self.max_rounds_var, width=15).grid(row=1, column=3, padx=5, pady=2)
         
         # Max Picks
-        ttk.Label(game_frame, text="Max Picks (2 or 3):").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(game_frame, text="Max Picks (1-4):").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.max_picks_var = tk.IntVar(value=3)
-        ttk.Spinbox(game_frame, from_=2, to=3, textvariable=self.max_picks_var, width=13).grid(row=2, column=1, padx=5, pady=2)
-        
+        self.max_picks_spinbox = ttk.Spinbox(game_frame, from_=1, to=4, textvariable=self.max_picks_var, width=13)
+        self.max_picks_spinbox.grid(row=2, column=1, padx=5, pady=2)
+
         # Betting Mode
         ttk.Label(game_frame, text="Betting Mode:").grid(row=2, column=2, sticky=tk.W, pady=2)
         self.mode_var = tk.StringVar(value="normal")
-        mode_combo = ttk.Combobox(game_frame, textvariable=self.mode_var, width=12)
-        mode_combo['values'] = ("normal", "medium", "high", "safe")
+        self.mode_var.trace_add("write", self._on_mode_var_changed)
+        mode_combo = ttk.Combobox(game_frame, textvariable=self.mode_var, width=12, state="readonly")
+        mode_combo['values'] = ("normal", "medium", "high", "safe", "custom")
         mode_combo.grid(row=2, column=3, padx=5, pady=2)
-        
+        mode_combo.bind('<<ComboboxSelected>>', lambda e: self._on_mode_changed_settings())
+
+        # Difficulty (used for standard modes and as default for custom mode steps)
+        ttk.Label(game_frame, text="Difficulty:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.difficulty_var = tk.StringVar(value="low")
+        self.diff_combo = ttk.Combobox(game_frame, textvariable=self.difficulty_var, width=12, state="readonly")
+        self.diff_combo['values'] = ("low", "medium", "high")
+        self.diff_combo.grid(row=3, column=1, padx=5, pady=2)
+
         # Betting Mode Editor Button
-        ttk.Button(game_frame, text="Edit Modes", command=self.open_betting_mode_editor).grid(row=3, column=2, columnspan=2, padx=5, pady=2)
-        
+        self.settings_mode_editor_button = ttk.Button(game_frame, text="Edit Modes", command=self.open_selected_mode_editor)
+        self.settings_mode_editor_button.grid(row=3, column=2, columnspan=2, padx=5, pady=2)
+
         # Wait between rounds
         self.wait_selected_var = tk.BooleanVar()
-        ttk.Checkbutton(game_frame, text="Random wait between rounds (1-6 min)", 
+        ttk.Checkbutton(game_frame, text="Random wait between rounds (1-6 min)",
                        variable=self.wait_selected_var).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=2)
+        
+        # Grinding Mode
+        self.grinding_mode_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(game_frame, text="Grinding mode",
+                        variable=self.grinding_mode_var).grid(row=4, column=2, columnspan=2, sticky=tk.W, pady=2)
         
         # Control Points Frame
         control_frame = ttk.LabelFrame(parent, text="Control Points", padding=10)
@@ -178,6 +247,20 @@ class GrattaEVinciGUI:
         ttk.Entry(control_frame, textvariable=self.lower_x_var, width=8).grid(row=1, column=1, padx=2, pady=2)
         ttk.Entry(control_frame, textvariable=self.lower_y_var, width=8).grid(row=1, column=2, padx=2, pady=2)
 
+        # Raise Difficulty Button
+        ttk.Label(control_frame, text="Raise Difficulty:").grid(row=1, column=3, sticky=tk.W, pady=2)
+        self.raise_diff_x_var = tk.IntVar(value=0)
+        self.raise_diff_y_var = tk.IntVar(value=0)
+        ttk.Entry(control_frame, textvariable=self.raise_diff_x_var, width=8).grid(row=1, column=4, padx=2, pady=2)
+        ttk.Entry(control_frame, textvariable=self.raise_diff_y_var, width=8).grid(row=1, column=5, padx=2, pady=2)
+
+        # Lower Difficulty Button
+        ttk.Label(control_frame, text="Lower Difficulty:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.lower_diff_x_var = tk.IntVar(value=0)
+        self.lower_diff_y_var = tk.IntVar(value=0)
+        ttk.Entry(control_frame, textvariable=self.lower_diff_x_var, width=8).grid(row=2, column=1, padx=2, pady=2)
+        ttk.Entry(control_frame, textvariable=self.lower_diff_y_var, width=8).grid(row=2, column=2, padx=2, pady=2)
+
         # Buttons
         button_frame = ttk.Frame(parent)
         button_frame.pack(fill=tk.X, padx=5, pady=10)
@@ -186,6 +269,28 @@ class GrattaEVinciGUI:
         ttk.Button(button_frame, text="Load Settings", command=self.load_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Reset to Defaults", command=self.reset_settings).pack(side=tk.LEFT, padx=5)
     
+    def _on_mode_changed_settings(self):
+        """Disable max_picks and difficulty widgets when custom mode is selected."""
+        is_custom = self.mode_var.get() == "custom"
+        self.max_picks_spinbox.config(state="disabled" if is_custom else "normal")
+        self.diff_combo.config(state="disabled" if is_custom else "readonly")
+        if hasattr(self, "settings_mode_editor_button"):
+            btn_label = "Edit Custom Sequence" if is_custom else "Edit Modes"
+            self.settings_mode_editor_button.config(text=btn_label)
+
+    def _on_mode_var_changed(self, *_):
+        """React to mode changes regardless of where they originate."""
+        self._on_mode_changed_settings()
+        if hasattr(self, "betting_preview_text"):
+            self.update_betting_preview()
+
+    def open_selected_mode_editor(self):
+        """Open the editor for the currently selected betting mode."""
+        if self.mode_var.get() == "custom":
+            self.open_custom_mode_editor()
+        else:
+            self.open_betting_mode_editor()
+
     def create_coordinates_tab(self, parent):
         # Mouse coordinates display
         coord_frame = ttk.LabelFrame(parent, text="Mouse Coordinates", padding=10)
@@ -490,9 +595,9 @@ class GrattaEVinciGUI:
         ttk.Label(mode_select_frame, text="Active Betting Mode:").pack(side=tk.LEFT, padx=(0, 10))
         
         mode_combo = ttk.Combobox(mode_select_frame, textvariable=self.mode_var, width=15, state="readonly")
-        mode_combo['values'] = ("normal", "medium", "high", "safe")
+        mode_combo['values'] = ("normal", "medium", "high", "safe", "custom")
         mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-        mode_combo.bind('<<ComboboxSelected>>', lambda e: self.update_betting_preview())
+        mode_combo.bind('<<ComboboxSelected>>', lambda e: (self.update_betting_preview(), self._on_mode_changed_settings()))
         
         ttk.Button(mode_select_frame, text="🔄 Refresh Preview", command=self.update_betting_preview).pack(side=tk.LEFT, padx=5)
         
@@ -516,21 +621,43 @@ class GrattaEVinciGUI:
         action_frame.grid_columnconfigure(4, weight=1)
         
         # Top row buttons
-        ttk.Button(action_frame, text="✏️ Edit Betting Modes", command=self.open_betting_mode_editor).grid(row=0, column=0, padx=2, pady=2, sticky=tk.EW)
+        ttk.Button(action_frame, text="✏️ Edit Selected Mode", command=self.open_selected_mode_editor).grid(row=0, column=0, padx=2, pady=2, sticky=tk.EW)
         ttk.Button(action_frame, text="📊 Analyze Modes", command=self.analyze_betting_modes).grid(row=0, column=1, padx=2, pady=2, sticky=tk.EW)
         ttk.Button(action_frame, text="🔄 Reset to Defaults", command=self.reset_betting_modes).grid(row=0, column=2, padx=2, pady=2, sticky=tk.EW)
         
         # Bottom row buttons
         ttk.Button(action_frame, text="📤 Export Modes", command=self.export_betting_modes).grid(row=1, column=0, padx=2, pady=2, sticky=tk.EW)
         ttk.Button(action_frame, text="📥 Import Modes", command=self.import_betting_modes).grid(row=1, column=1, padx=2, pady=2, sticky=tk.EW)
-        
+        ttk.Button(action_frame, text="🛠️ Edit Custom Mode", command=self.open_custom_mode_editor).grid(row=1, column=2, padx=2, pady=2, sticky=tk.EW)
+
         # Initial preview update
         self.root.after(100, self.update_betting_preview)
     
     def update_betting_preview(self):
         """Update the betting mode preview"""
         selected_mode = self.mode_var.get()
-        
+
+        if selected_mode == "custom":
+            preview_text = "Mode: Custom\n"
+            preview_text += f"Number of steps: {len(self.custom_mode)}\n\n"
+            preview_text += "Step progression:\n"
+            preview_text += "-" * 55 + "\n"
+            cumulative_risk = 0.0
+            for i, step in enumerate(self.custom_mode):
+                cumulative_risk = round(cumulative_risk + step["b"], 2)
+                preview_text += (
+                    f"Step #{i+1:2d}: Bet={self.format_money(step['b']):>8s}  "
+                    f"Picks={step['p']}  Difficulty={step['d']:<6s}  "
+                    f"(Total risk: {self.format_money(cumulative_risk)})\n"
+                )
+            total_risk = round(sum(s["b"] for s in self.custom_mode), 2)
+            preview_text += f"\nTotal risk if all steps used: {self.format_money(total_risk)}\n"
+            self.betting_preview_text.config(state=tk.NORMAL)
+            self.betting_preview_text.delete(1.0, tk.END)
+            self.betting_preview_text.insert(tk.END, preview_text)
+            self.betting_preview_text.config(state=tk.DISABLED)
+            return
+
         if selected_mode in self.betting_modes:
             mode_values = self.betting_modes[selected_mode]
             
@@ -612,10 +739,10 @@ class GrattaEVinciGUI:
             analysis += f"Total Risk: {self.format_money(sum(mode_values))}\n"
             analysis += f"Max Bet: {self.format_money(max(mode_values))}\n"
             
-            # Calculate break-even win rate
+            # Calculate break-even win rate using configured difficulty/picks
             total_risk = sum(mode_values)
-            # Assuming 2.4x multiplier for wins
-            breakeven_rate = total_risk / (total_risk + 2.4 * mode_values[0])
+            analysis_multiplier = self.get_win_multiplier(self.difficulty_var.get(), self.max_picks_var.get())
+            breakeven_rate = total_risk / (total_risk + analysis_multiplier * mode_values[0])
             analysis += f"Break-even win rate: {breakeven_rate:.1%}\n"
             
             analysis += "\n"
@@ -629,7 +756,8 @@ class GrattaEVinciGUI:
         for mode_name, mode_values in self.betting_modes.items():
             total_risk = sum(mode_values)
             max_bet = max(mode_values)
-            breakeven = total_risk / (total_risk + 2.4 * mode_values[0])
+            analysis_multiplier = self.get_win_multiplier(self.difficulty_var.get(), self.max_picks_var.get())
+            breakeven = total_risk / (total_risk + analysis_multiplier * mode_values[0])
             analysis += f"{mode_name:<10} {len(mode_values):<6} {self.format_money(max_bet):<10} {self.format_money(total_risk):<12} {breakeven:.1%}\n"
         
         analysis_text.insert(tk.END, analysis)
@@ -644,9 +772,9 @@ class GrattaEVinciGUI:
             # Ensure default modes only use values from bet_values
             default_modes = {
                 "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-                "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 15.0, 20.0],
+                "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 16.0, 20.0],
                 "high": [0.2, 0.3, 0.6, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0],
-                "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 15.0, 20.0]
+                "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0]
             }
             
             # Validate that all default values are in bet_values
@@ -711,6 +839,294 @@ class GrattaEVinciGUI:
             except Exception as e:
                 messagebox.showerror("Import Error", f"Failed to import betting modes: {e}")
     
+    def create_init_steps_tab(self, parent):
+        """Create the initialization steps configuration tab"""
+        self._step_type_map = {
+            "Forza Bet al Minimo":           "set_bet_min",
+            "Alza Difficoltà (N click)":     "raise_difficulty",
+            "Abbassa Difficoltà (N click)":  "lower_difficulty",
+            "Aspetta N secondi":             "wait",
+            "Click a coordinate X,Y":        "click",
+        }
+        self._step_action_labels = {v: k for k, v in self._step_type_map.items()}
+
+        # ── Sequenza step ────────────────────────────────────────────────────
+        list_frame = ttk.LabelFrame(parent, text="Sequenza di Inizializzazione", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        tree_container = ttk.Frame(list_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+
+        self.init_tree = ttk.Treeview(
+            tree_container,
+            columns=("n", "tipo", "dettagli"),
+            show="headings",
+            height=8,
+            selectmode="browse"
+        )
+        self.init_tree.heading("n",        text="#",            anchor=tk.CENTER)
+        self.init_tree.heading("tipo",     text="Tipo azione")
+        self.init_tree.heading("dettagli", text="Dettagli")
+        self.init_tree.column("n",        width=35,  minwidth=35,  anchor=tk.CENTER)
+        self.init_tree.column("tipo",     width=220, minwidth=150)
+        self.init_tree.column("dettagli", width=380, minwidth=150)
+
+        tree_sb = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.init_tree.yview)
+        self.init_tree.configure(yscrollcommand=tree_sb.set)
+        self.init_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        btn_row = ttk.Frame(list_frame)
+        btn_row.pack(fill=tk.X, pady=(8, 0))
+
+        ttk.Button(btn_row, text="▲ Su",         command=self.init_step_move_up).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_row, text="▼ Giù",        command=self.init_step_move_down).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_row, text="✕ Rimuovi",    command=self.init_step_remove).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_row, text="🗑 Svuota",    command=self.init_step_clear).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_row, text="↺ Default",    command=self.init_step_reset).pack(side=tk.RIGHT, padx=2)
+
+        # ── Aggiungi nuovo step ──────────────────────────────────────────────
+        add_frame = ttk.LabelFrame(parent, text="Aggiungi Nuovo Step", padding=10)
+        add_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        type_row = ttk.Frame(add_frame)
+        type_row.pack(fill=tk.X, pady=(0, 6))
+
+        ttk.Label(type_row, text="Tipo di azione:").pack(side=tk.LEFT, padx=(0, 8))
+        self._new_step_display = tk.StringVar(value="Forza Bet al Minimo")
+        type_combo = ttk.Combobox(
+            type_row,
+            textvariable=self._new_step_display,
+            state="readonly",
+            width=30,
+            values=list(self._step_type_map.keys())
+        )
+        type_combo.pack(side=tk.LEFT)
+        type_combo.bind("<<ComboboxSelected>>", self._on_step_type_change)
+
+        self._step_params_frame = ttk.Frame(add_frame)
+        self._step_params_frame.pack(fill=tk.X, pady=(0, 6))
+        self._step_param_vars = {}
+        self._build_step_params_ui()
+
+        ttk.Button(add_frame, text="➕  Aggiungi Step", command=self.init_step_add).pack(anchor=tk.W)
+
+        # ── Coordinate pulsanti difficoltà ───────────────────────────────────
+        diff_frame = ttk.LabelFrame(parent, text="Coordinate Pulsanti Difficoltà", padding=10)
+        diff_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        diff_grid = ttk.Frame(diff_frame)
+        diff_grid.pack(anchor=tk.W)
+
+        ttk.Label(diff_grid, text="Alza difficoltà:").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        ttk.Label(diff_grid, text="X:").grid(row=0, column=1, padx=2)
+        ttk.Entry(diff_grid, textvariable=self.raise_diff_x_var, width=8).grid(row=0, column=2, padx=2)
+        ttk.Label(diff_grid, text="Y:").grid(row=0, column=3, padx=2)
+        ttk.Entry(diff_grid, textvariable=self.raise_diff_y_var, width=8).grid(row=0, column=4, padx=2)
+
+        ttk.Label(diff_grid, text="Abbassa difficoltà:").grid(row=1, column=0, sticky=tk.W, padx=(0, 8), pady=(6, 0))
+        ttk.Label(diff_grid, text="X:").grid(row=1, column=1, padx=2, pady=(6, 0))
+        ttk.Entry(diff_grid, textvariable=self.lower_diff_x_var, width=8).grid(row=1, column=2, padx=2, pady=(6, 0))
+        ttk.Label(diff_grid, text="Y:").grid(row=1, column=3, padx=2, pady=(6, 0))
+        ttk.Entry(diff_grid, textvariable=self.lower_diff_y_var, width=8).grid(row=1, column=4, padx=2, pady=(6, 0))
+
+        ttk.Label(diff_grid,
+                  text="Le stesse coordinate della scheda Settings (condivise)",
+                  font=("TkDefaultFont", 8), foreground="gray").grid(
+            row=2, column=0, columnspan=5, sticky=tk.W, pady=(6, 0))
+
+        self.refresh_init_tree()
+
+    def _on_step_type_change(self, event=None):
+        """Rebuild parameter widgets when step type changes"""
+        for w in self._step_params_frame.winfo_children():
+            w.destroy()
+        self._step_param_vars = {}
+        self._build_step_params_ui()
+
+    def _build_step_params_ui(self):
+        """Build dynamic parameter inputs based on selected step type"""
+        action = self._step_type_map.get(self._new_step_display.get(), "set_bet_min")
+
+        if action == "set_bet_min":
+            ttk.Label(self._step_params_frame,
+                      text="Nessun parametro — forza la scommessa al minimo del modo corrente",
+                      foreground="gray").pack(side=tk.LEFT)
+
+        elif action in ("raise_difficulty", "lower_difficulty"):
+            ttk.Label(self._step_params_frame, text="Numero di click:").pack(side=tk.LEFT, padx=(0, 6))
+            var = tk.IntVar(value=1)
+            ttk.Spinbox(self._step_params_frame, from_=1, to=50,
+                        textvariable=var, width=5).pack(side=tk.LEFT)
+            self._step_param_vars["times"] = var
+
+        elif action == "wait":
+            ttk.Label(self._step_params_frame, text="Durata (secondi):").pack(side=tk.LEFT, padx=(0, 6))
+            var = tk.DoubleVar(value=2.0)
+            ttk.Spinbox(self._step_params_frame, from_=0.5, to=120.0,
+                        increment=0.5, textvariable=var, width=7).pack(side=tk.LEFT)
+            self._step_param_vars["seconds"] = var
+
+        elif action == "click":
+            ttk.Label(self._step_params_frame, text="X:").pack(side=tk.LEFT, padx=(0, 3))
+            x_var = tk.IntVar(value=0)
+            ttk.Entry(self._step_params_frame, textvariable=x_var, width=7).pack(side=tk.LEFT, padx=(0, 8))
+            ttk.Label(self._step_params_frame, text="Y:").pack(side=tk.LEFT, padx=(0, 3))
+            y_var = tk.IntVar(value=0)
+            ttk.Entry(self._step_params_frame, textvariable=y_var, width=7).pack(side=tk.LEFT, padx=(0, 8))
+            ttk.Label(self._step_params_frame, text="Etichetta:").pack(side=tk.LEFT, padx=(0, 3))
+            lbl_var = tk.StringVar(value="Click")
+            ttk.Entry(self._step_params_frame, textvariable=lbl_var, width=14).pack(side=tk.LEFT)
+            self._step_param_vars["x"] = x_var
+            self._step_param_vars["y"] = y_var
+            self._step_param_vars["label"] = lbl_var
+
+    def init_step_add(self):
+        """Add a new initialization step to the list"""
+        action = self._step_type_map.get(self._new_step_display.get(), "set_bet_min")
+        step = {"action": action}
+
+        if action in ("raise_difficulty", "lower_difficulty"):
+            step["times"] = self._step_param_vars["times"].get()
+        elif action == "wait":
+            step["seconds"] = round(self._step_param_vars["seconds"].get(), 1)
+        elif action == "click":
+            step["x"]     = self._step_param_vars["x"].get()
+            step["y"]     = self._step_param_vars["y"].get()
+            step["label"] = self._step_param_vars["label"].get()
+
+        self.init_steps.append(step)
+        self.refresh_init_tree()
+
+    def init_step_move_up(self):
+        """Move the selected step one position up"""
+        sel = self.init_tree.selection()
+        if not sel:
+            return
+        idx = self.init_tree.index(sel[0])
+        if idx > 0:
+            self.init_steps[idx], self.init_steps[idx - 1] = self.init_steps[idx - 1], self.init_steps[idx]
+            self.refresh_init_tree()
+            items = self.init_tree.get_children()
+            if idx - 1 < len(items):
+                self.init_tree.selection_set(items[idx - 1])
+
+    def init_step_move_down(self):
+        """Move the selected step one position down"""
+        sel = self.init_tree.selection()
+        if not sel:
+            return
+        idx = self.init_tree.index(sel[0])
+        if idx < len(self.init_steps) - 1:
+            self.init_steps[idx], self.init_steps[idx + 1] = self.init_steps[idx + 1], self.init_steps[idx]
+            self.refresh_init_tree()
+            items = self.init_tree.get_children()
+            if idx + 1 < len(items):
+                self.init_tree.selection_set(items[idx + 1])
+
+    def init_step_remove(self):
+        """Remove the selected step"""
+        sel = self.init_tree.selection()
+        if not sel:
+            return
+        idx = self.init_tree.index(sel[0])
+        del self.init_steps[idx]
+        self.refresh_init_tree()
+
+    def init_step_clear(self):
+        """Remove all initialization steps"""
+        if messagebox.askyesno("Conferma", "Svuotare tutti gli step di inizializzazione?"):
+            self.init_steps = []
+            self.refresh_init_tree()
+
+    def init_step_reset(self):
+        """Reset initialization steps to the default (set_bet_min only)"""
+        if messagebox.askyesno("Conferma", "Ripristinare gli step predefiniti?"):
+            self.init_steps = [{"action": "set_bet_min"}]
+            self.refresh_init_tree()
+
+    def refresh_init_tree(self):
+        """Refresh the treeview display of initialization steps"""
+        if not hasattr(self, 'init_tree'):
+            return
+        self.init_tree.delete(*self.init_tree.get_children())
+        for i, step in enumerate(self.init_steps):
+            action = step.get("action", "?")
+            tipo = self._step_action_labels.get(action, action)
+
+            if action == "set_bet_min":
+                mode = self.mode_var.get() if hasattr(self, 'mode_var') else "?"
+                seq  = self.betting_modes.get(mode, [0.1])
+                dettagli = f"bet → {seq[0]:.2f} €  (modo: {mode})"
+            elif action == "raise_difficulty":
+                times = step.get("times", 1)
+                dettagli = f"{times} click  →  ({self.raise_diff_x_var.get()}, {self.raise_diff_y_var.get()})"
+            elif action == "lower_difficulty":
+                times = step.get("times", 1)
+                dettagli = f"{times} click  →  ({self.lower_diff_x_var.get()}, {self.lower_diff_y_var.get()})"
+            elif action == "wait":
+                dettagli = f"{step.get('seconds', 1):.1f} secondi"
+            elif action == "click":
+                x = step.get("x", 0); y = step.get("y", 0)
+                dettagli = f"({x}, {y})   {step.get('label', '')}"
+            else:
+                dettagli = ""
+
+            self.init_tree.insert("", tk.END, values=(i + 1, tipo, dettagli))
+
+    async def execute_init_steps(self):
+        """Execute the user-defined initialization steps before the game loop"""
+        if not self.init_steps:
+            self.log_message("ℹ️ Nessuno step di inizializzazione configurato.")
+            return
+
+        self.log_message(f"🚀 Inizializzazione: {len(self.init_steps)} step in esecuzione...")
+
+        for i, step in enumerate(self.init_steps):
+            if self.escape_pressed:
+                break
+            action = step.get("action")
+            self.log_message(f"  ⚙️  [{i + 1}/{len(self.init_steps)}] {self._step_action_labels.get(action, action)}")
+
+            if action == "set_bet_min":
+                await self.decrease_bet_force()
+
+            elif action == "raise_difficulty":
+                times = step.get("times", 1)
+                rx, ry = self.raise_diff_x_var.get(), self.raise_diff_y_var.get()
+                if rx == 0 and ry == 0:
+                    self.log_message("  ⚠️  Coordinate Alza Difficoltà non configurate!")
+                else:
+                    for _ in range(times):
+                        pyautogui.click(rx, ry)
+                        await asyncio.sleep(self.sleep_init_raise_diff_var.get())
+                    self.log_message(f"  ⬆️  Difficoltà alzata × {times}")
+
+            elif action == "lower_difficulty":
+                times = step.get("times", 1)
+                lx, ly = self.lower_diff_x_var.get(), self.lower_diff_y_var.get()
+                if lx == 0 and ly == 0:
+                    self.log_message("  ⚠️  Coordinate Abbassa Difficoltà non configurate!")
+                else:
+                    for _ in range(times):
+                        pyautogui.click(lx, ly)
+                        await asyncio.sleep(self.sleep_init_lower_diff_var.get())
+                    self.log_message(f"  ⬇️  Difficoltà abbassata × {times}")
+
+            elif action == "wait":
+                seconds = step.get("seconds", 1)
+                self.log_message(f"  ⏳  Attesa {seconds} secondi...")
+                await asyncio.sleep(seconds)
+
+            elif action == "click":
+                x = step.get("x", 0); y = step.get("y", 0)
+                label = step.get("label", f"({x},{y})")
+                pyautogui.click(x, y)
+                self.log_message(f"  🖱️  Click: {label}  ({x}, {y})")
+                await asyncio.sleep(self.sleep_init_click_var.get())
+
+        self.log_message("✅ Inizializzazione completata.")
+
     def create_control_tab(self, parent):
         # Game control buttons
         control_frame = ttk.LabelFrame(parent, text="Game Control", padding=10)
@@ -792,7 +1208,65 @@ class GrattaEVinciGUI:
         ttk.Label(stats_grid, text="🎉 Total Win:").grid(row=3, column=2, sticky=tk.W, pady=2)
         self.total_win_label = ttk.Label(stats_grid, text="0.00", font=("Courier", 10))
         self.total_win_label.grid(row=3, column=3, sticky=tk.W, padx=10, pady=2)
-    
+
+    def create_pauses_tab(self, parent):
+        """Create tab for configurable pause durations."""
+        game_loop_frame = ttk.LabelFrame(parent, text="Loop di gioco", padding=10)
+        game_loop_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        setup_frame = ttk.LabelFrame(parent, text="Operazioni di setup", padding=10)
+        setup_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        def add_pause_row(container, row, label_text, variable):
+            ttk.Label(container, text=label_text).grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=2)
+            ttk.Spinbox(
+                container,
+                from_=0.01,
+                to=30.0,
+                increment=0.05,
+                width=8,
+                textvariable=variable
+            ).grid(row=row, column=1, sticky=tk.W, pady=2)
+
+        add_pause_row(game_loop_frame, 0, "Prima di play/collect (s)", self.sleep_play_or_collect_var)
+        add_pause_row(game_loop_frame, 1, "Prima di increase_bet (s)", self.sleep_increase_bet_var)
+        add_pause_row(game_loop_frame, 2, "Prima di decrease_bet (s)", self.sleep_decrease_bet_var)
+        add_pause_row(game_loop_frame, 3, "Dopo play, prima del tile (s)", self.sleep_after_play_var)
+        add_pause_row(game_loop_frame, 4, "Dopo click tile (s)", self.sleep_after_tile_click_var)
+        add_pause_row(game_loop_frame, 5, "Tra i round (s)", self.sleep_between_rounds_var)
+        add_pause_row(game_loop_frame, 6, "Dopo risultato/prima del prossimo bet (s)", self.sleep_after_result_var)
+        add_pause_row(game_loop_frame, 7, "Retry colore sconosciuto (s)", self.sleep_color_retry_var)
+
+        add_pause_row(setup_frame, 0, "Prima di click_tile (s)", self.sleep_click_tile_var)
+        add_pause_row(setup_frame, 1, "Tra click in decrease_bet_force (s)", self.sleep_decrease_bet_force_var)
+        add_pause_row(setup_frame, 2, "Tra click in decrease_diff_force (s)", self.sleep_decrease_diff_force_var)
+        add_pause_row(setup_frame, 3, "Tra click in set_difficulty (s)", self.sleep_set_difficulty_var)
+        add_pause_row(setup_frame, 4, "Alza diff. in init steps (s)", self.sleep_init_raise_diff_var)
+        add_pause_row(setup_frame, 5, "Abbassa diff. in init steps (s)", self.sleep_init_lower_diff_var)
+        add_pause_row(setup_frame, 6, "Click generico in init steps (s)", self.sleep_init_click_var)
+
+        def reset_pauses():
+            self.sleep_play_or_collect_var.set(1.0)
+            self.sleep_increase_bet_var.set(1.0)
+            self.sleep_decrease_bet_var.set(1.0)
+            self.sleep_decrease_bet_force_var.set(0.05)
+            self.sleep_decrease_diff_force_var.set(0.05)
+            self.sleep_set_difficulty_var.set(0.5)
+            self.sleep_click_tile_var.set(1.0)
+            self.sleep_after_play_var.set(1.0)
+            self.sleep_after_tile_click_var.set(1.0)
+            self.sleep_between_rounds_var.set(1.0)
+            self.sleep_after_result_var.set(2.0)
+            self.sleep_color_retry_var.set(1.0)
+            self.sleep_init_raise_diff_var.set(0.4)
+            self.sleep_init_lower_diff_var.set(0.4)
+            self.sleep_init_click_var.set(0.3)
+
+        btn_frame = ttk.Frame(parent)
+        btn_frame.pack(fill=tk.X, padx=5, pady=10)
+        ttk.Button(btn_frame, text="Salva pause", command=self.save_settings).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Reset valori default", command=reset_pauses).pack(side=tk.LEFT)
+
     def start_mouse_monitoring(self):
         """Start monitoring mouse coordinates"""
         self.mouse_monitoring = True
@@ -961,9 +1435,9 @@ class GrattaEVinciGUI:
             if messagebox.askyesno("Reset", "Reset all betting modes to default values?"):
                 default_modes = {
                     "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-                    "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 15.0, 20.0],
+                    "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 16.0, 20.0],
                     "high": [0.2, 0.3, 0.6, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0],
-                    "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 15.0, 20.0]
+                    "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0]
                 }
                 
                 # Update text widgets
@@ -1049,7 +1523,7 @@ class GrattaEVinciGUI:
         """Play/collect button click"""
         play_x = self.play_x_var.get()
         play_y = self.play_y_var.get()
-        await asyncio.sleep(1)
+        await asyncio.sleep(self.sleep_play_or_collect_var.get())
         pyautogui.click(play_x, play_y)
         self.log_message("🎮 Clicked play/collect button")
     
@@ -1057,7 +1531,7 @@ class GrattaEVinciGUI:
         """Increase bet by clicking raise bet button"""
         raise_x = self.raise_x_var.get()
         raise_y = self.raise_y_var.get()
-        await asyncio.sleep(1)  # Small delay to ensure click is registered (same as playM.py)
+        await asyncio.sleep(self.sleep_increase_bet_var.get())  # Small delay to ensure click is registered (same as playM.py)
         pyautogui.click(raise_x, raise_y)
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
@@ -1065,11 +1539,10 @@ class GrattaEVinciGUI:
         self.log_message(f"📈 Bet increased to: {self.format_money(self.bet)}")
     
     async def decrease_bet(self):
-        await asyncio.sleep(1)
+        await asyncio.sleep(self.sleep_decrease_bet_var.get())
         """Decrease bet by clicking lower bet button"""
         lower_x = self.lower_x_var.get()
         lower_y = self.lower_y_var.get()
-        await asyncio.sleep(1)  # Same timing as playM.py
         pyautogui.click(lower_x, lower_y)
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
@@ -1083,24 +1556,67 @@ class GrattaEVinciGUI:
         
         # Click lower bet button multiple times to ensure minimum (same as playM.py)
         for i in range(len(self.bet_values)):
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(self.sleep_decrease_bet_force_var.get())
             pyautogui.click(lower_x, lower_y)
         
-        # Get selected mode and use its first value as minimum bet (same as playM.py)
+        # Get selected mode and use its first value as minimum bet
         selected_mode_name = self.mode_var.get()
-        if selected_mode_name in self.betting_modes:
+        if selected_mode_name == "custom" and self.custom_mode:
+            min_bet = self.custom_mode[0]["b"]
+        elif selected_mode_name in self.betting_modes:
             min_bet = self.betting_modes[selected_mode_name][0]
         else:
-            min_bet = 0.1  # Fallback to 0.1 if mode not found
-        
-        self.bet = round(min_bet, 2)  # Ensure bet is set to minimum and rounded (same as playM.py)
+            min_bet = 0.1
+
+        self.bet = round(min_bet, 2)
         self.log_message(f"🔽 Bet forced to minimum: {self.format_money(self.bet)}")
-    
+
+    async def set_bet_value(self, target_bet):
+        """Adjust current bet to an exact value by clicking +/- buttons."""
+        target_bet = round(target_bet, 2)
+        if target_bet not in self.bet_values:
+            self.log_message(f"[WARN] Bet {self.format_money(target_bet)} non valida per set_bet_value")
+            return
+        while self.bet < target_bet:
+            await self.increase_bet()
+        while self.bet > target_bet:
+            await self.decrease_bet()
+
+    async def decrease_difficulty_force(self):
+        """Force difficulty to minimum (low) by clicking lower_difficulty many times"""
+        lx = self.lower_diff_x_var.get()
+        ly = self.lower_diff_y_var.get()
+        if lx == 0 and ly == 0:
+            return  # Coordinate non configurate
+        for _ in range(5):
+            await asyncio.sleep(self.sleep_decrease_diff_force_var.get())
+            pyautogui.click(lx, ly)
+        self.current_difficulty = "low"
+        self.log_message("🔽 Difficoltà forzata al minimo (low)")
+
+    async def set_difficulty(self, target_difficulty):
+        """Forza al minimo poi alza alla difficoltà target: low/medium/high"""
+        if self.current_difficulty == target_difficulty:
+            self.log_message(f"[DIFF] Difficoltà già impostata a {target_difficulty}, nessun cambio necessario")
+            return
+        await self.decrease_difficulty_force()
+        rx = self.raise_diff_x_var.get()
+        ry = self.raise_diff_y_var.get()
+        if rx == 0 and ry == 0:
+            return  # Coordinate non configurate
+        clicks = {"low": 0, "medium": 1, "high": 2}.get(target_difficulty, 0)
+        for _ in range(clicks):
+            await asyncio.sleep(self.sleep_set_difficulty_var.get())
+            pyautogui.click(rx, ry)
+        self.current_difficulty = target_difficulty
+        if clicks > 0:
+            self.log_message(f"🎯 Difficoltà impostata a: {target_difficulty}")
+
     async def click_tile(self, tile_number):
         """Click on a specific tile"""
         if tile_number in self.tiles:
             point = self.tiles[tile_number]
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.sleep_click_tile_var.get())
             pyautogui.click(point.x, point.y)
             self.log_message(f"🎯 Clicked tile {tile_number} at ({point.x}, {point.y})")
         else:
@@ -1246,6 +1762,8 @@ class GrattaEVinciGUI:
         self.rounds = 0
         self.loss = 0.0
         self.total_win = 0.0  # Add this line
+        self.grinding_active = False
+        self.grinding_saved_balance = None
         self.update_stats_display()
         
         threading.Thread(target=self.run_test_mode, daemon=True).start()
@@ -1253,6 +1771,8 @@ class GrattaEVinciGUI:
     def run_test_mode(self):
         """Run game simulation for testing"""
         try:
+            test_multiplier = self.get_win_multiplier(self.difficulty_var.get(), self.max_picks_var.get())
+
             # Simulate some game rounds
             for round_num in range(1, 6):
                 if not self.game_running:
@@ -1264,7 +1784,7 @@ class GrattaEVinciGUI:
                 # Simulate random outcome
                 if random.random() < 0.6:  # 60% win chance
                     self.log_message("🎉 Test WIN!")
-                    win_amount = self.bet * 2.4
+                    win_amount = self.bet * test_multiplier
                     self.current_cash += win_amount
                     self.current_cash = round(self.current_cash, 2)
                     self.total_win += win_amount  # Add this line
@@ -1365,9 +1885,10 @@ class GrattaEVinciGUI:
             if starting_cash <= 0:
                 raise ValueError("Starting cash must be positive")
             
-            max_picks = self.max_picks_var.get()
-            if max_picks not in [2, 3]:
-                raise ValueError("Max picks must be 2 or 3")
+            if self.mode_var.get() != "custom":
+                max_picks = self.max_picks_var.get()
+                if max_picks not in [1, 2, 3, 4]:
+                    raise ValueError("Max picks must be between 1 and 4")
             
             return True
         except Exception as e:
@@ -1394,7 +1915,10 @@ class GrattaEVinciGUI:
         self.loss = 0.0
         self.total_win = 0.0  # Add this line
         self.randoms = []
-        
+        self.grinding_active = False
+        self.grinding_saved_balance = None
+        self.current_difficulty = None  # Resettato: difficoltà ignota fino alla prima impostazione
+
         self.log_message(f"💰 Initialized with cash: {self.format_money(self.current_cash)}")
         self.update_stats_display()
     
@@ -1436,9 +1960,15 @@ class GrattaEVinciGUI:
         self.log_message("🎮 Starting REAL game automation...")
         self.log_message("⚠️ Make sure your game window is positioned correctly!")
         
-        # Force set bet to minimum at start
-        await self.decrease_bet_force()
-        
+        # Execute user-defined initialization steps
+        await self.execute_init_steps()
+
+        # Set difficulty (standard modes: once at start; custom: handled per round)
+        if self.mode_var.get() != "custom":
+            await self.set_difficulty(self.difficulty_var.get())
+        else:
+            await self.decrease_difficulty_force()
+
         while self.game_running and not self.escape_pressed:
             # Check end conditions
             if self.rounds >= max_rounds:
@@ -1447,7 +1977,7 @@ class GrattaEVinciGUI:
             if self.current_cash >= target_win:
                 self.log_message("🎉 Reached target win!")
                 break
-            if self.loss >= max_loss:
+            if self.loss >= max_loss and not self.grinding_active:
                 self.log_message("💸 Reached maximum loss!")
                 break
             if self.current_cash < self.bet:
@@ -1472,7 +2002,7 @@ class GrattaEVinciGUI:
             self.root.after(0, self.update_stats_display)
             
             # Small delay between rounds
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.sleep_between_rounds_var.get())
         
         # Game ended
         self.root.after(0, self.stop_game)
@@ -1483,161 +2013,246 @@ class GrattaEVinciGUI:
     
     async def play_real_game_round(self):
         """Play an actual game round with mouse automation"""
-        max_picks = self.max_picks_var.get()
-        
+        selected_mode_name = self.mode_var.get()
+        step_idx = None
+        max_step_idx = None
+        grinding_enabled = bool(self.grinding_mode_var.get())
+
+        # Determine picks and difficulty for this round
+        if self.grinding_active:
+            max_picks = GRINDING_STEP["p"]
+            round_difficulty = GRINDING_STEP["d"]
+            await self.set_difficulty(round_difficulty)
+            await self.set_bet_value(GRINDING_STEP["b"])
+            if self.bet > self.highest_bet:
+                self.highest_bet = round(self.bet, 2)
+            if self.grinding_saved_balance is not None:
+                self.log_message(
+                    f"[GRIND] Attivo: ripeto b={GRINDING_STEP['b']:.1f}, p={GRINDING_STEP['p']}, d={GRINDING_STEP['d']} "
+                    f"fino a saldo >= {self.format_money(self.grinding_saved_balance)}"
+                )
+        elif selected_mode_name == "custom" and self.custom_mode:
+            step_idx = min(self.tries, len(self.custom_mode) - 1)
+            max_step_idx = len(self.custom_mode) - 1
+            step_data = self.custom_mode[step_idx]
+            max_picks = step_data["p"]
+            round_difficulty = step_data["d"]
+            await self.set_difficulty(round_difficulty)
+        else:
+            max_picks = self.max_picks_var.get()
+            round_difficulty = self.difficulty_var.get()
+            if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
+                step_idx = min(self.tries, len(self.betting_modes[selected_mode_name]) - 1)
+                max_step_idx = len(self.betting_modes[selected_mode_name]) - 1
+
+        multiplier = self.get_win_multiplier(round_difficulty, max_picks)
+
         # Start new round - reset picks and prepare for new game
         self.picks = 0
         self.randoms = []
         round_active = True
-        
+
         self.log_message(f"\n=== Round {self.rounds + 1} ===")
-        self.log_message(f"💰 Current bet: {self.format_money(self.bet)}")
-        
+        self.log_message(f"[ROUND] Current bet: {self.format_money(self.bet)}")
+
         # Press play to start the round and immediately deduct cash
         await self.play_or_collect()
-        self.log_message(f"🎮 Started round - Cash deducted: {self.format_money(self.bet)}")
+        self.log_message(f"[ROUND] Started round - Cash deducted: {self.format_money(self.bet)}")
         self.current_cash -= self.bet
         self.current_cash = round(self.current_cash, 2)
-        
+        self.log_message(f"💸 New Balance: {self.format_money(self.current_cash)}")
+
         # Keep picking tiles until we get max_picks blues (win) or 1 red (lose)
         while round_active and self.picks < max_picks:
             # Check for escape key press during round
             if self.escape_pressed:
-                self.log_message("🛑 Game stopped by escape key during round")
+                self.log_message("[STOP] Game stopped by escape key during round")
                 round_active = False
                 break
-            
+
             # Generate random tile number
             tile_number = self.generate_random_tile()
-            
+
             # Wait for game to process
-            await asyncio.sleep(1)
-            
+            await asyncio.sleep(self.sleep_after_play_var.get())
+
             # Click on the corresponding tile
             await self.click_tile(tile_number)
-            await asyncio.sleep(1)
-            
+            await asyncio.sleep(self.sleep_after_tile_click_var.get())
+
             # Check color of the revealed tile with retry mechanism
             color_detected = False
             retry_count = 0
-            max_retries = 3
-            
-            while not color_detected and retry_count < max_retries:
+
+            while not color_detected:
+                if self.escape_pressed:
+                    self.log_message("[STOP] Game stopped by escape key during color detection")
+                    round_active = False
+                    break
+
                 # Get the position of the tile we just clicked
                 clicked_tile_position = self.tiles[tile_number]
                 color = self.read_color_at_point(clicked_tile_position)
-                
+
                 # Print the actual color values detected
-                self.log_message(f"🎨 Color at tile {tile_number} ({clicked_tile_position.x}, {clicked_tile_position.y}): RGB({color['r']}, {color['g']}, {color['b']})")
-                
+                self.log_message(
+                    f"[COLOR] Tile {tile_number} ({clicked_tile_position.x}, {clicked_tile_position.y}): "
+                    f"RGB({color['r']}, {color['g']}, {color['b']})"
+                )
+
                 if self.is_color_in_range_blue(color, self.target_blue):
                     # BLUE tile found
-                    self.log_message(f"✅ Tile {tile_number} is BLUE")
+                    self.log_message(f"[HIT] Tile {tile_number} is BLUE")
                     self.picks += 1
                     color_detected = True
-                    
+
                     # Check if we got max_picks blues (WIN)
                     if self.picks >= max_picks:
-                        self.log_message(f"🎉 {max_picks} BLUES! ROUND WON!")
-                        
+                        self.log_message(f"[WIN] {max_picks} BLUES! ROUND WON!")
+
                         # Press collect to get winnings
                         await self.play_or_collect()
-                        
+
                         # Increase cash by bet times multiplier (we win!)
-                        multiplier = 1.8 if max_picks == 2 else 2.4
                         win_amount = self.bet * multiplier
                         self.current_cash += win_amount
                         self.current_cash = round(self.current_cash, 2)
-                        self.total_win += win_amount  # Add this line
-                        self.total_win = round(self.total_win, 2)  # Add this line
-                        
-                        self.log_message(f"💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)}")
-                        
+                        self.total_win += win_amount
+                        self.total_win = round(self.total_win, 2)
+
+                        self.log_message(
+                            f"[WIN] 💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)} 💰"
+                        )
+
                         # Update highest cash
                         if self.current_cash > self.highest_cash:
                             self.highest_cash = round(self.current_cash, 2)
-                        
-                        # Reset betting strategy after win - back to minimum bet
-                        self.tries = 0
-                        self.picks = 0
-                        
-                        # Get selected mode and use its first value as minimum bet (same as playM.py)
-                        selected_mode_name = self.mode_var.get()
-                        if selected_mode_name in self.betting_modes:
-                            min_bet = self.betting_modes[selected_mode_name][0]
+
+                        if self.grinding_active:
+                            if self.grinding_saved_balance is not None and self.current_cash >= self.grinding_saved_balance:
+                                # Grinding completed: target balance recovered
+                                self.grinding_active = False
+                                self.tries = 0
+                                self.picks = 0
+
+                                if selected_mode_name == "custom" and self.custom_mode:
+                                    min_bet = self.custom_mode[0]["b"]
+                                elif selected_mode_name in self.betting_modes:
+                                    min_bet = self.betting_modes[selected_mode_name][0]
+                                else:
+                                    min_bet = 0.1
+
+                                await self.set_bet_value(min_bet)
+                                self.log_message(
+                                    f"[GRIND] Completato: saldo recuperato ({self.format_money(self.current_cash)} >= "
+                                    f"{self.format_money(self.grinding_saved_balance)}). Bet tornata al minimo."
+                                )
+                            else:
+                                await self.set_bet_value(GRINDING_STEP["b"])
+                                target_text = self.format_money(self.grinding_saved_balance or 0)
+                                self.log_message(
+                                    f"[GRIND] Saldo attuale {self.format_money(self.current_cash)} "
+                                    f"(target {target_text}), continuo sullo step fisso."
+                                )
                         else:
-                            min_bet = 0.1  # Fallback to 0.1 if mode not found
-                        
-                        # Decrease bet down to minimum
-                        while self.bet > min_bet:
-                            await self.decrease_bet()
-                        
-                        self.log_message(f"🎯 WIN! Bet reset to minimum: {self.format_money(self.bet)}")
-                        
+                            # Reset betting strategy after win - back to step 0
+                            self.tries = 0
+                            self.picks = 0
+
+                            if selected_mode_name == "custom" and self.custom_mode:
+                                min_bet = self.custom_mode[0]["b"]
+                            elif selected_mode_name in self.betting_modes:
+                                min_bet = self.betting_modes[selected_mode_name][0]
+                            else:
+                                min_bet = 0.1
+
+                            await self.set_bet_value(min_bet)
+                            self.log_message(f"[WIN] Bet reset to minimum: {self.format_money(self.bet)}")
+
                         # Reset for next round
                         round_active = False
-                        
+
                     else:
                         # Continue picking - we have less than max_picks blues
                         self.log_message(f"Got {self.picks} blue(s), need {max_picks - self.picks} more...")
-                        
+
                 elif self.is_color_in_range_red(color, self.target_red):
                     # RED tile found - ROUND LOST
-                    self.log_message(f"❌ Tile {tile_number} is RED - ROUND LOST!")
+                    self.log_message(f"[LOSS] Tile {tile_number} is RED - ROUND LOST!")
                     color_detected = True
-                    
+                    self.log_message(f"💸 New Balance: {self.format_money(self.current_cash)} 💸")
+
+                    # In grinding mode, save cash when losing at the lowest step.
+                    if grinding_enabled and not self.grinding_active and step_idx == 0:
+                        self.grinding_saved_balance = round(self.current_cash, 2)
+
                     # Cash already deducted when round started, just update strategy
                     self.tries += 1
-                    
+
                     # Reset picks and end round
                     self.picks = 0
                     round_active = False
-                    
+
+                    # Activate grinding after a loss on the highest step with bet=20.0
+                    reached_top_step = (
+                        step_idx is not None and
+                        max_step_idx is not None and
+                        step_idx >= max_step_idx
+                    )
+                    if (
+                        grinding_enabled and
+                        not self.grinding_active and
+                        reached_top_step and
+                        round(self.bet, 2) == round(GRINDING_STEP["b"], 2) and
+                        self.grinding_saved_balance is not None
+                    ):
+                        self.grinding_active = True
+                        self.log_message(
+                            f"[GRIND] Attivato dopo perdita all'ultimo step: ripeto b={GRINDING_STEP['b']:.1f}, "
+                            f"p={GRINDING_STEP['p']}, d={GRINDING_STEP['d']} fino a saldo >= "
+                            f"{self.format_money(self.grinding_saved_balance)}"
+                        )
+
                     # Update betting strategy after showing round results
-                    selected_mode_name = self.mode_var.get()
-                    if selected_mode_name in self.betting_modes:
+                    await asyncio.sleep(self.sleep_after_result_var.get())
+
+                    if self.grinding_active:
+                        await self.set_difficulty(GRINDING_STEP["d"])
+                        await self.set_bet_value(GRINDING_STEP["b"])
+                    elif selected_mode_name == "custom" and self.custom_mode:
+                        next_idx = min(self.tries, len(self.custom_mode) - 1)
+                        target_bet = self.custom_mode[next_idx]["b"]
+                        await self.set_bet_value(target_bet)
+                    elif selected_mode_name in self.betting_modes:
                         mode_array = self.betting_modes[selected_mode_name]
-                        # Use tries as index, but cap at array length - 1
                         bet_index = min(self.tries, len(mode_array) - 1)
                         target_bet = mode_array[bet_index]
+                        await self.set_bet_value(target_bet)
 
-                        await asyncio.sleep(2)  # Small delay to give time for UI updates
-                        
-                        # Adjust bet to target
-                        while self.bet < target_bet:
-                            await self.increase_bet()
-                        
-                        # Update highest bet tracking
-                        if self.bet > self.highest_bet:
-                            self.highest_bet = round(self.bet, 2)
-                        
-                        self.log_message(f"💸 LOSS! Bet increased to: {self.format_money(self.bet)} (try #{self.tries})")
-                    
+                    if self.bet > self.highest_bet:
+                        self.highest_bet = round(self.bet, 2)
+
+                    self.log_message(f"[LOSS] Bet aggiornato a: {self.format_money(self.bet)} (try #{self.tries})")
+
                     # Calculate loss
                     self.loss = max(0, round(self.highest_cash - self.current_cash, 2))
-                    if self.loss >= self.max_loss_var.get():
-                        self.log_message("⚠️ Reached maximum loss!")
+                    if self.loss >= self.max_loss_var.get() and not self.grinding_active:
+                        self.log_message("[STOP] Reached maximum loss!")
                         self.game_running = False
                         break
-                    
+
                 else:
-                    # Unknown color detected - retry after waiting
+                    # Unknown color detected - retry until a known color is found
                     retry_count += 1
-                    self.log_message(f"❓ Tile {tile_number} - Unknown color (attempt {retry_count}/{max_retries})")
-                    self.log_message(f"   Expected: Blue RGB(1,108,238) or Red RGB(200,13,1)")
+                    self.log_message(f"[COLOR] Tile {tile_number} - Unknown color (attempt {retry_count})")
+                    self.log_message("   Expected: Blue RGB(1,108,238) or Red RGB(200,13,1)")
                     self.log_message(f"   Actual: RGB({color['r']}, {color['g']}, {color['b']})")
-                    
-                    if retry_count < max_retries:
-                        self.log_message("   Waiting 1 second and retrying color detection...")
-                        await asyncio.sleep(1)
-                    else:
-                        self.log_message("   Max retries reached, assuming neutral tile...")
-                        color_detected = True
-                        continue
-        
+                    self.log_message("   Waiting 1 second and retrying color detection...")
+                    await asyncio.sleep(self.sleep_color_retry_var.get())
+
         # Round completed, increment round counter
         self.rounds += 1
-    
+
     async def simulate_game_round(self):
         """Simulate a game round (placeholder)"""
         self.rounds += 1
@@ -1649,7 +2264,8 @@ class GrattaEVinciGUI:
         
         if random.random() < 0.6:  # 60% win chance for testing
             self.log_message("🎉 Round WON!")
-            self.current_cash += self.bet * 2.4
+            sim_multiplier = self.get_win_multiplier(self.difficulty_var.get(), self.max_picks_var.get())
+            self.current_cash += self.bet * sim_multiplier
             self.tries = 0
             
             # Get selected mode and use its first value as minimum bet (same as playM.py logic)
@@ -1783,6 +2399,105 @@ class GrattaEVinciGUI:
                 messagebox.showerror("Export Error", f"Failed to export log:\n{str(e)}")
                 self.log_message(f"❌ Log export failed: {str(e)}")
     
+    def open_custom_mode_editor(self):
+        """Open the custom betting mode editor"""
+        editor = tk.Toplevel(self.root)
+        editor.title("Custom Betting Mode Editor")
+        editor.geometry("680x480")
+        editor.resizable(True, True)
+        editor.transient(self.root)
+        editor.grab_set()
+
+        ttk.Label(editor, text="Custom Betting Mode Editor", font=("TkDefaultFont", 12, "bold")).pack(pady=(10, 4))
+        instructions = (
+            "Una riga = uno step.   Formato:  b=<bet>, p=<picks>, d=<difficulty>\n"
+            "  b = importo scommessa (valori validi della lista bet_values)\n"
+            "  p = numero di pick (1, 2, 3, 4)\n"
+            "  d = difficoltà (low, medium, high)\n"
+            "In caso di vittoria → ritorna allo step 1.   In caso di perdita → avanza allo step successivo."
+        )
+        ttk.Label(editor, text=instructions, justify=tk.LEFT, foreground="gray").pack(padx=15, pady=(0, 8), anchor=tk.W)
+
+        text_frame = ttk.Frame(editor)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 8))
+        text_widget = scrolledtext.ScrolledText(text_frame, height=14, font=("Courier", 10))
+        text_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Popola con il custom_mode corrente
+        for step in self.custom_mode:
+            text_widget.insert(tk.END, f"b={step['b']}, p={step['p']}, d={step['d']}\n")
+
+        def validate_and_save():
+            content = text_widget.get("1.0", tk.END).strip()
+            if not content:
+                messagebox.showerror("Errore", "Il custom mode non può essere vuoto.", parent=editor)
+                return
+            new_mode = []
+            all_errors = []
+            for i, line in enumerate(content.splitlines(), 1):
+                line = line.strip()
+                if not line:
+                    continue
+                line_errors = []
+                try:
+                    parts = {}
+                    for token in line.split(","):
+                        k, v = token.strip().split("=")
+                        parts[k.strip()] = v.strip()
+                    b = round(float(parts["b"]), 2)
+                    p = int(parts["p"])
+                    d = parts["d"].lower()
+                    if b not in self.bet_values:
+                        line_errors.append(f"Riga {i}: b={b} non è un valore valido")
+                    if p not in (1, 2, 3, 4):
+                        line_errors.append(f"Riga {i}: p={p} deve essere tra 1 e 4")
+                    if d not in ("low", "medium", "high"):
+                        line_errors.append(f"Riga {i}: d={d} deve essere low, medium o high")
+                    if not line_errors:
+                        new_mode.append({"b": b, "p": p, "d": d})
+                    else:
+                        all_errors.extend(line_errors)
+                except Exception:
+                    all_errors.append(f"Riga {i}: formato non valido — usa: b=0.1, p=2, d=low")
+            if all_errors:
+                messagebox.showerror("Errori di validazione", "\n".join(all_errors), parent=editor)
+                return
+            if len(new_mode) < 1:
+                messagebox.showerror("Errore", "Almeno uno step è richiesto.", parent=editor)
+                return
+            self.custom_mode = new_mode
+            self.update_betting_preview()
+            # Auto-salva sul JSON così le modifiche persistono al riavvio
+            self._save_custom_mode_silent()
+            messagebox.showinfo("Salvato", f"Custom mode salvato con {len(new_mode)} step!", parent=editor)
+            editor.destroy()
+
+        btn_frame = ttk.Frame(editor)
+        btn_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
+        ttk.Button(btn_frame, text="💾 Salva", command=validate_and_save).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="❌ Annulla", command=editor.destroy).pack(side=tk.LEFT, padx=5)
+
+        editor.update_idletasks()
+        x = (editor.winfo_screenwidth() - editor.winfo_width()) // 2
+        y = (editor.winfo_screenheight() - editor.winfo_height()) // 2
+        editor.geometry(f"+{x}+{y}")
+
+    def _save_custom_mode_silent(self):
+        """Salva il custom_mode nel JSON senza mostrare messagebox."""
+        try:
+            settings = {}
+            if os.path.exists("gratta_settings.json"):
+                with open("gratta_settings.json", "r") as f:
+                    settings = json.load(f)
+            settings["custom_mode"] = self.custom_mode
+            settings["difficulty"] = self.difficulty_var.get()
+            settings["mode"] = self.mode_var.get()
+            with open("gratta_settings.json", "w") as f:
+                json.dump(settings, f, indent=2)
+            self.log_message("💾 Custom mode salvato automaticamente nel JSON")
+        except Exception as e:
+            self.log_message(f"⚠️ Errore salvataggio automatico custom mode: {e}")
+
     def save_settings(self):
         """Save settings to file"""
         settings = {
@@ -1793,14 +2508,37 @@ class GrattaEVinciGUI:
             "max_picks": self.max_picks_var.get(),
             "mode": self.mode_var.get(),
             "wait_selected": self.wait_selected_var.get(),
+            "grinding_mode": self.grinding_mode_var.get(),
             "play_x": self.play_x_var.get(),
             "play_y": self.play_y_var.get(),
             "raise_x": self.raise_x_var.get(),
             "raise_y": self.raise_y_var.get(),
             "lower_x": self.lower_x_var.get(),
             "lower_y": self.lower_y_var.get(),
+            "raise_diff_x": self.raise_diff_x_var.get(),
+            "raise_diff_y": self.raise_diff_y_var.get(),
+            "lower_diff_x": self.lower_diff_x_var.get(),
+            "lower_diff_y": self.lower_diff_y_var.get(),
+            "difficulty": self.difficulty_var.get(),
+            "custom_mode": self.custom_mode,
             "tiles": {str(num): [x_var.get(), y_var.get()] for num, (x_var, y_var) in self.tile_vars.items()},
-            "betting_modes": self.betting_modes
+            "betting_modes": self.betting_modes,
+            "init_steps": self.init_steps,
+            "sleep_play_or_collect": self.sleep_play_or_collect_var.get(),
+            "sleep_increase_bet": self.sleep_increase_bet_var.get(),
+            "sleep_decrease_bet": self.sleep_decrease_bet_var.get(),
+            "sleep_decrease_bet_force": self.sleep_decrease_bet_force_var.get(),
+            "sleep_decrease_diff_force": self.sleep_decrease_diff_force_var.get(),
+            "sleep_set_difficulty": self.sleep_set_difficulty_var.get(),
+            "sleep_click_tile": self.sleep_click_tile_var.get(),
+            "sleep_after_play": self.sleep_after_play_var.get(),
+            "sleep_after_tile_click": self.sleep_after_tile_click_var.get(),
+            "sleep_between_rounds": self.sleep_between_rounds_var.get(),
+            "sleep_after_result": self.sleep_after_result_var.get(),
+            "sleep_color_retry": self.sleep_color_retry_var.get(),
+            "sleep_init_raise_diff": self.sleep_init_raise_diff_var.get(),
+            "sleep_init_lower_diff": self.sleep_init_lower_diff_var.get(),
+            "sleep_init_click": self.sleep_init_click_var.get()
         }
         
         try:
@@ -1824,6 +2562,7 @@ class GrattaEVinciGUI:
                 self.max_picks_var.set(settings.get("max_picks", 3))
                 self.mode_var.set(settings.get("mode", "normal"))
                 self.wait_selected_var.set(settings.get("wait_selected", False))
+                self.grinding_mode_var.set(settings.get("grinding_mode", False))
                 
                 self.play_x_var.set(settings.get("play_x", 2196))
                 self.play_y_var.set(settings.get("play_y", 1616))
@@ -1831,7 +2570,32 @@ class GrattaEVinciGUI:
                 self.raise_y_var.set(settings.get("raise_y", 1740))
                 self.lower_x_var.set(settings.get("lower_x", 1519))
                 self.lower_y_var.set(settings.get("lower_y", 1740))
-                
+                self.raise_diff_x_var.set(settings.get("raise_diff_x", 0))
+                self.raise_diff_y_var.set(settings.get("raise_diff_y", 0))
+                self.lower_diff_x_var.set(settings.get("lower_diff_x", 0))
+                self.lower_diff_y_var.set(settings.get("lower_diff_y", 0))
+                self.difficulty_var.set(settings.get("difficulty", "low"))
+                self.sleep_play_or_collect_var.set(settings.get("sleep_play_or_collect", 1.0))
+                self.sleep_increase_bet_var.set(settings.get("sleep_increase_bet", 1.0))
+                self.sleep_decrease_bet_var.set(settings.get("sleep_decrease_bet", 1.0))
+                self.sleep_decrease_bet_force_var.set(settings.get("sleep_decrease_bet_force", 0.05))
+                self.sleep_decrease_diff_force_var.set(settings.get("sleep_decrease_diff_force", 0.05))
+                self.sleep_set_difficulty_var.set(settings.get("sleep_set_difficulty", 0.5))
+                self.sleep_click_tile_var.set(settings.get("sleep_click_tile", 1.0))
+                self.sleep_after_play_var.set(settings.get("sleep_after_play", 1.0))
+                self.sleep_after_tile_click_var.set(settings.get("sleep_after_tile_click", 1.0))
+                self.sleep_between_rounds_var.set(settings.get("sleep_between_rounds", 1.0))
+                self.sleep_after_result_var.set(settings.get("sleep_after_result", 2.0))
+                self.sleep_color_retry_var.set(settings.get("sleep_color_retry", 1.0))
+                self.sleep_init_raise_diff_var.set(settings.get("sleep_init_raise_diff", 0.4))
+                self.sleep_init_lower_diff_var.set(settings.get("sleep_init_lower_diff", 0.4))
+                self.sleep_init_click_var.set(settings.get("sleep_init_click", 0.3))
+
+                # Load custom mode
+                saved_custom = settings.get("custom_mode", [])
+                if saved_custom and isinstance(saved_custom, list):
+                    self.custom_mode = saved_custom
+
                 # Load tile positions
                 tiles = settings.get("tiles", {})
                 for tile_str, coords in tiles.items():
@@ -1848,10 +2612,18 @@ class GrattaEVinciGUI:
                         if isinstance(mode_values, list) and all(isinstance(v, (int, float)) for v in mode_values):
                             self.betting_modes[mode_name] = [round(v, 2) for v in mode_values]
                     self.log_message("Betting modes loaded from settings")
-                
+
+                # Load initialization steps
+                loaded_steps = settings.get("init_steps", None)
+                if loaded_steps is not None and isinstance(loaded_steps, list):
+                    self.init_steps = loaded_steps
+                    if hasattr(self, 'init_tree'):
+                        self.refresh_init_tree()
+
                 self.log_message("Settings loaded successfully!")
         except Exception as e:
             self.log_message(f"Failed to load settings: {e}")
+        self._on_mode_changed_settings()
     
     def reset_settings(self):
         """Reset settings to defaults"""
@@ -1863,8 +2635,10 @@ class GrattaEVinciGUI:
             self.max_rounds_var.set(100)
             self.max_picks_var.set(3)
             self.mode_var.set("normal")
+            self.difficulty_var.set("low")
             self.wait_selected_var.set(False)
-            
+            self.grinding_mode_var.set(False)
+
             self.play_x_var.set(2196)
             self.play_y_var.set(1616)
             self.raise_x_var.set(1900)
@@ -1873,6 +2647,7 @@ class GrattaEVinciGUI:
             self.lower_y_var.set(1740)
             
             self.auto_generate_grid()
+            self._on_mode_changed_settings()
             messagebox.showinfo("Reset", "Settings reset to defaults!")
     
     def on_closing(self):
@@ -1896,3 +2671,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
