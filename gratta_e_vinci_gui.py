@@ -92,7 +92,10 @@ class CoordinateRecorder:
         self._create_overlay()
 
         try:
-            self.mouse_listener = mouse.Listener(on_click=self._on_click)
+            self.mouse_listener = mouse.Listener(
+                on_click=self._on_click,
+                win32_event_filter=self._win32_mouse_event_filter,
+            )
             self.kb_listener = keyboard.Listener(on_press=self._on_key)
             self.mouse_listener.start()
             self.kb_listener.start()
@@ -190,6 +193,21 @@ class CoordinateRecorder:
         self.overlay.lift()
         self.overlay.focus_force()
         self._update_overlay()
+
+    def _win32_mouse_event_filter(self, msg, data):
+        if self._closed:
+            return True
+
+        right_button_down = getattr(mouse.Listener, "WM_RBUTTONDOWN", None)
+        right_button_up = getattr(mouse.Listener, "WM_RBUTTONUP", None)
+
+        if msg == right_button_down:
+            self.app.root.after(0, self._go_back)
+            self.mouse_listener.suppress_event()
+        elif msg == right_button_up:
+            self.mouse_listener.suppress_event()
+
+        return True
 
     def _update_overlay(self):
         if not self.overlay or not self.overlay.winfo_exists():
