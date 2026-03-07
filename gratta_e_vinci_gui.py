@@ -9,7 +9,7 @@ import asyncio
 import pyautogui
 import random
 import time
-from pynput import keyboard
+from pynput import keyboard, mouse
 import json
 import os
 
@@ -19,7 +19,7 @@ WIN_MULTIPLIERS = {
     "high": {1: 1.6, 2: 2.7, 3: 4.8, 4: 8.7},
 }
 
-GRINDING_STEP = {"b": 20.0, "p": 3, "d": "high"}
+GRINDING_STEP = {"b": 20.0, "d": "high"}
 
 class Point:
     def __init__(self, x, y):
@@ -29,11 +29,305 @@ class Point:
     def __repr__(self):
         return f"Point({self.x}, {self.y})"
 
+
+class CoordinateRecorder:
+    def __init__(self, app):
+        self.app = app
+        self.steps = self._build_steps()
+        self.current_step = 0
+        self.recorded = {}
+        self.overlay = None
+        self.mouse_listener = None
+        self.kb_listener = None
+        self.step_counter_label = None
+        self.instruction_label = None
+        self.status_label = None
+        self.step_labels = []
+        self._closed = False
+
+    def _build_steps(self):
+        return [
+            {"label": "Tile 1", "type": "xy", "var_key": 1},
+            {"label": "Tile 2", "type": "x_only", "var_key": 2},
+            {"label": "Tile 3", "type": "x_only", "var_key": 3},
+            {"label": "Tile 4", "type": "x_only", "var_key": 4},
+            {"label": "Tile 5", "type": "x_only", "var_key": 5},
+            {"label": "Tile 6", "type": "y_only", "var_key": 6},
+            {"label": "Tile 11", "type": "y_only", "var_key": 11},
+            {"label": "Tile 16", "type": "y_only", "var_key": 16},
+            {"label": "Tile 21", "type": "y_only", "var_key": 21},
+            {
+                "label": "Play/Collect Button",
+                "type": "xy",
+                "var_key": ("play_x_var", "play_y_var"),
+            },
+            {
+                "label": "Raise Bet Button",
+                "type": "xy",
+                "var_key": ("raise_x_var", "raise_y_var"),
+            },
+            {
+                "label": "Lower Bet Button",
+                "type": "xy",
+                "var_key": ("lower_x_var", "lower_y_var"),
+            },
+            {
+                "label": "Raise Difficulty Button",
+                "type": "xy",
+                "var_key": ("raise_diff_x_var", "raise_diff_y_var"),
+            },
+            {
+                "label": "Lower Difficulty Button",
+                "type": "xy",
+                "var_key": ("lower_diff_x_var", "lower_diff_y_var"),
+            },
+        ]
+
+    def start(self):
+        existing = getattr(self.app, "coordinate_recorder", None)
+        if existing and existing is not self:
+            existing._cancel()
+
+        self.app.coordinate_recorder = self
+        self._create_overlay()
+
+        try:
+            self.mouse_listener = mouse.Listener(on_click=self._on_click)
+            self.kb_listener = keyboard.Listener(on_press=self._on_key)
+            self.mouse_listener.start()
+            self.kb_listener.start()
+        except Exception as e:
+            self._cancel()
+            messagebox.showerror("Coordinate Recorder", f"Unable to start listeners:\n{e}")
+
+    def _create_overlay(self):
+        self.app.root.update_idletasks()
+        base_x = max(0, self.app.root.winfo_rootx() + 40)
+        base_y = max(0, self.app.root.winfo_rooty() + 40)
+
+        self.overlay = tk.Toplevel(self.app.root)
+        self.overlay.title("Recording Coordinates")
+        self.overlay.geometry(f"600x500+{base_x}+{base_y}")
+        self.overlay.resizable(False, False)
+        self.overlay.attributes("-topmost", True)
+        self.overlay.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        main_frame = tk.Frame(self.overlay, bg="#F5F7FB", padx=12, pady=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        title_label = tk.Label(
+            main_frame,
+            text="Recording Coordinates",
+            font=("Arial", 13, "bold"),
+            bg="#F5F7FB",
+            fg="#1F2937",
+        )
+        title_label.pack(anchor="w")
+
+        self.step_counter_label = tk.Label(
+            main_frame,
+            font=("Arial", 10),
+            bg="#F5F7FB",
+            fg="#475569",
+        )
+        self.step_counter_label.pack(anchor="w", pady=(4, 0))
+
+        self.instruction_label = tk.Label(
+            main_frame,
+            font=("Arial", 12, "bold"),
+            bg="#F5F7FB",
+            fg="#0F172A",
+            justify=tk.LEFT,
+            anchor="w",
+            wraplength=345,
+        )
+        self.instruction_label.pack(fill=tk.X, pady=(8, 2))
+
+        self.status_label = tk.Label(
+            main_frame,
+            font=("Arial", 10),
+            bg="#F5F7FB",
+            fg="#B45309",
+            justify=tk.LEFT,
+            anchor="w",
+        )
+        self.status_label.pack(fill=tk.X, pady=(0, 8))
+
+        steps_frame = tk.Frame(main_frame, bg="#FFFFFF", bd=1, relief=tk.SOLID)
+        steps_frame.pack(fill=tk.BOTH, expand=True)
+
+        for col in range(2):
+            steps_frame.grid_columnconfigure(col, weight=1)
+
+        for idx, step in enumerate(self.steps):
+            row = idx % 7
+            col = idx // 7
+            step_label = tk.Label(
+                steps_frame,
+                text=step["label"],
+                anchor="w",
+                justify=tk.LEFT,
+                font=("Arial", 8),
+                padx=6,
+                pady=2,
+                bg="#FFFFFF",
+                fg="#334155",
+            )
+            step_label.grid(row=row, column=col, sticky="ew", padx=2, pady=1)
+            self.step_labels.append(step_label)
+
+        footer_label = tk.Label(
+            main_frame,
+            text="← → navigate  |  Right-click = redo  |  Enter = save  |  ESC = cancel",
+            font=("Arial", 8),
+            bg="#F5F7FB",
+            fg="#475569",
+            wraplength=345,
+            justify=tk.CENTER,
+        )
+        footer_label.pack(fill=tk.X, pady=(8, 0))
+
+        self.overlay.lift()
+        self.overlay.focus_force()
+        self._update_overlay()
+
+    def _update_overlay(self):
+        if not self.overlay or not self.overlay.winfo_exists():
+            return
+
+        step = self.steps[self.current_step]
+        type_suffix = {"xy": "", "x_only": " (X position)", "y_only": " (Y position)"}
+        short_suffix = {"xy": "", "x_only": " (X)", "y_only": " (Y)"}
+
+        self.step_counter_label.config(text=f"Step {self.current_step + 1} / {len(self.steps)}")
+        self.instruction_label.config(text=f"Click on: {step['label']}{type_suffix[step['type']]}")
+
+        coords = self.recorded.get(self.current_step)
+        if coords:
+            self.status_label.config(text=f"Recorded: ({coords[0]}, {coords[1]})", fg="#166534")
+        else:
+            self.status_label.config(text="Not recorded yet", fg="#B45309")
+
+        for idx, label in enumerate(self.step_labels):
+            current_step = self.steps[idx]
+            marker = "✓" if idx in self.recorded else "•"
+            bg = "#DBEAFE" if idx == self.current_step else "#FFFFFF"
+            fg = "#0F172A" if idx == self.current_step else "#334155"
+            font = ("Arial", 8, "bold") if idx == self.current_step else ("Arial", 8)
+            label.config(
+                text=f"{marker} {idx + 1}. {current_step['label']}{short_suffix[current_step['type']]}",
+                bg=bg,
+                fg=fg,
+                font=font,
+            )
+
+    def _on_click(self, x, y, button, pressed):
+        if not pressed or self._closed:
+            return
+
+        if button == mouse.Button.left:
+            self.app.root.after(0, lambda: self._record_and_advance(x, y))
+        elif button == mouse.Button.right:
+            self.app.root.after(0, self._go_back)
+
+    def _on_key(self, key):
+        if self._closed:
+            return
+
+        if key == keyboard.Key.esc:
+            self.app.root.after(0, self._cancel)
+        elif key == keyboard.Key.enter:
+            self.app.root.after(0, self._save_and_close)
+        elif key == keyboard.Key.left:
+            self.app.root.after(0, lambda: self._navigate(-1))
+        elif key == keyboard.Key.right:
+            self.app.root.after(0, lambda: self._navigate(1))
+
+    def _record_and_advance(self, x, y):
+        if self._closed:
+            return
+
+        self.recorded[self.current_step] = (int(x), int(y))
+        if self.current_step < len(self.steps) - 1:
+            self.current_step += 1
+        self._update_overlay()
+
+    def _go_back(self):
+        if self._closed:
+            return
+
+        target_step = self.current_step
+        if target_step not in self.recorded and target_step > 0:
+            target_step -= 1
+
+        self.current_step = target_step
+        self.recorded.pop(target_step, None)
+        self._update_overlay()
+
+    def _navigate(self, delta):
+        if self._closed:
+            return
+
+        self.current_step = max(0, min(len(self.steps) - 1, self.current_step + delta))
+        self._update_overlay()
+
+    def _cancel(self):
+        if self._closed:
+            return
+
+        self._closed = True
+        self._stop_listeners()
+        if self.overlay and self.overlay.winfo_exists():
+            self.overlay.destroy()
+        self.overlay = None
+        if getattr(self.app, "coordinate_recorder", None) is self:
+            self.app.coordinate_recorder = None
+
+    def _save_and_close(self):
+        if self._closed:
+            return
+
+        for step_index, coords in self.recorded.items():
+            step = self.steps[step_index]
+            x, y = coords
+
+            if step["type"] == "xy":
+                if isinstance(step["var_key"], int):
+                    x_var, y_var = self.app.tile_vars[step["var_key"]]
+                    x_var.set(x)
+                    y_var.set(y)
+                else:
+                    x_name, y_name = step["var_key"]
+                    getattr(self.app, x_name).set(x)
+                    getattr(self.app, y_name).set(y)
+            elif step["type"] == "x_only":
+                self.app.tile_vars[step["var_key"]][0].set(x)
+            elif step["type"] == "y_only":
+                self.app.tile_vars[step["var_key"]][1].set(y)
+
+        if hasattr(self.app, "update_all_tiles"):
+            self.app.root.after(0, self.app.update_all_tiles)
+
+        self._cancel()
+
+    def _stop_listeners(self):
+        for listener_name in ("mouse_listener", "kb_listener"):
+            listener = getattr(self, listener_name)
+            if not listener:
+                continue
+
+            try:
+                listener.stop()
+            except Exception:
+                pass
+            finally:
+                setattr(self, listener_name, None)
+
 class GrattaEVinciGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Gratta-e-Vinci Automation v2.0")
-        self.root.geometry("800x900")
+        self.root.geometry("900x1000")
         self.root.resizable(True, True)
         
         # Initialize variables
@@ -219,8 +513,18 @@ class GrattaEVinciGUI:
         
         # Grinding Mode
         self.grinding_mode_var = tk.BooleanVar(value=False)
+        self.grinding_range_var = tk.DoubleVar(value=0.5)
+        self.grinding_p_random_var = tk.BooleanVar(value=False)
+
         ttk.Checkbutton(game_frame, text="Grinding mode",
-                        variable=self.grinding_mode_var).grid(row=4, column=2, columnspan=2, sticky=tk.W, pady=2)
+                        variable=self.grinding_mode_var,
+                        command=self._on_grinding_toggle).grid(row=4, column=2, sticky=tk.W, pady=2)
+        ttk.Label(game_frame, text="Range:").grid(row=4, column=3, sticky=tk.E, padx=(10, 2))
+        self.grinding_range_entry = ttk.Entry(game_frame, textvariable=self.grinding_range_var, width=6)
+        self.grinding_range_entry.grid(row=4, column=4, sticky=tk.W, pady=2)
+        self.grinding_p_random_cb = ttk.Checkbutton(game_frame, text="p random (fallback)",
+                                                     variable=self.grinding_p_random_var)
+        self.grinding_p_random_cb.grid(row=5, column=2, columnspan=2, sticky=tk.W, pady=2)
         
         # Control Points Frame
         control_frame = ttk.LabelFrame(parent, text="Control Points", padding=10)
@@ -277,6 +581,25 @@ class GrattaEVinciGUI:
         if hasattr(self, "settings_mode_editor_button"):
             btn_label = "Edit Custom Sequence" if is_custom else "Edit Modes"
             self.settings_mode_editor_button.config(text=btn_label)
+
+    def _on_grinding_toggle(self):
+        """Enable/disable grinding sub-controls based on checkbox state."""
+        state = tk.NORMAL if self.grinding_mode_var.get() else tk.DISABLED
+        self.grinding_range_entry.config(state=state)
+        self.grinding_p_random_cb.config(state=state)
+
+    def get_grinding_picks(self):
+        """Return the minimum p (1-3) that would recover grinding_saved_balance, or fallback."""
+        b = 20.0
+        target = self.grinding_saved_balance if self.grinding_saved_balance is not None else 0
+        for p in [1, 2, 3]:
+            projected = self.current_cash + (b * WIN_MULTIPLIERS["high"][p])
+            if projected >= target:
+                return p
+        # None of p=1,2,3 sufficient
+        if self.grinding_p_random_var.get():
+            return random.randint(1, 3)
+        return 3
 
     def _on_mode_var_changed(self, *_):
         """React to mode changes regardless of where they originate."""
@@ -432,10 +755,12 @@ class GrattaEVinciGUI:
                             current_y_var.set(y)
             except Exception as e:
                 print(f"Error in update_all_tiles: {e}")
+
+        self.update_all_tiles = update_all_tiles
         
         # Bind update function to coordinate changes
         def on_coordinate_change(*args):
-            self.root.after_idle(update_all_tiles)
+            self.root.after_idle(self.update_all_tiles)
         
         # Bind all coordinate variables to the update function
         x1_var.trace('w', on_coordinate_change)
@@ -446,7 +771,7 @@ class GrattaEVinciGUI:
             var.trace('w', on_coordinate_change)
         
         # Initial calculation
-        update_all_tiles()
+        self.update_all_tiles()
         
         # Preview frame to show calculated coordinates
         preview_frame = ttk.LabelFrame(tile_frame, text="📋 Calculated Grid Preview", padding=10)
@@ -500,6 +825,14 @@ class GrattaEVinciGUI:
         quick_frame = ttk.Frame(tile_frame)  # Change from coords_main_frame to tile_frame
         quick_frame.pack(fill=tk.X, pady=(10, 0))
         
+        tk.Button(
+            quick_frame,
+            text="Record Coordinates",
+            command=lambda: CoordinateRecorder(self).start(),
+            bg="#2196F3",
+            fg="white",
+            font=("Arial", 10, "bold"),
+        ).pack(side=tk.LEFT, padx=5)
         ttk.Button(quick_frame, text="🔄 Reset to Default Grid", command=self.reset_tile_grid).pack(side=tk.LEFT, padx=5)
         ttk.Button(quick_frame, text="🎯 Test Click Tile 1", command=lambda: self.test_click_tile(1)).pack(side=tk.LEFT, padx=5)
         ttk.Button(quick_frame, text="📋 Show All Coordinates", command=self.show_all_coordinates).pack(side=tk.LEFT, padx=5)
@@ -2020,7 +2353,7 @@ class GrattaEVinciGUI:
 
         # Determine picks and difficulty for this round
         if self.grinding_active:
-            max_picks = GRINDING_STEP["p"]
+            max_picks = self.get_grinding_picks()
             round_difficulty = GRINDING_STEP["d"]
             await self.set_difficulty(round_difficulty)
             await self.set_bet_value(GRINDING_STEP["b"])
@@ -2028,7 +2361,7 @@ class GrattaEVinciGUI:
                 self.highest_bet = round(self.bet, 2)
             if self.grinding_saved_balance is not None:
                 self.log_message(
-                    f"[GRIND] Attivo: ripeto b={GRINDING_STEP['b']:.1f}, p={GRINDING_STEP['p']}, d={GRINDING_STEP['d']} "
+                    f"[GRIND] Attivo: b={GRINDING_STEP['b']:.1f}, p={max_picks}, d={GRINDING_STEP['d']} "
                     f"fino a saldo >= {self.format_money(self.grinding_saved_balance)}"
                 )
         elif selected_mode_name == "custom" and self.custom_mode:
@@ -2184,7 +2517,8 @@ class GrattaEVinciGUI:
 
                     # In grinding mode, save cash when losing at the lowest step.
                     if grinding_enabled and not self.grinding_active and step_idx == 0:
-                        self.grinding_saved_balance = round(self.current_cash, 2)
+                        acceptable_range = self.grinding_range_var.get()
+                        self.grinding_saved_balance = round(self.highest_cash - acceptable_range, 2)
 
                     # Cash already deducted when round started, just update strategy
                     self.tries += 1
@@ -2403,7 +2737,7 @@ class GrattaEVinciGUI:
         """Open the custom betting mode editor"""
         editor = tk.Toplevel(self.root)
         editor.title("Custom Betting Mode Editor")
-        editor.geometry("680x480")
+        editor.geometry("500x700")
         editor.resizable(True, True)
         editor.transient(self.root)
         editor.grab_set()
@@ -2509,6 +2843,8 @@ class GrattaEVinciGUI:
             "mode": self.mode_var.get(),
             "wait_selected": self.wait_selected_var.get(),
             "grinding_mode": self.grinding_mode_var.get(),
+            "grinding_range": self.grinding_range_var.get(),
+            "grinding_p_random": self.grinding_p_random_var.get(),
             "play_x": self.play_x_var.get(),
             "play_y": self.play_y_var.get(),
             "raise_x": self.raise_x_var.get(),
@@ -2563,7 +2899,10 @@ class GrattaEVinciGUI:
                 self.mode_var.set(settings.get("mode", "normal"))
                 self.wait_selected_var.set(settings.get("wait_selected", False))
                 self.grinding_mode_var.set(settings.get("grinding_mode", False))
-                
+                self.grinding_range_var.set(settings.get("grinding_range", 0.5))
+                self.grinding_p_random_var.set(settings.get("grinding_p_random", False))
+                self._on_grinding_toggle()
+
                 self.play_x_var.set(settings.get("play_x", 2196))
                 self.play_y_var.set(settings.get("play_y", 1616))
                 self.raise_x_var.set(settings.get("raise_x", 1900))
@@ -2624,6 +2963,7 @@ class GrattaEVinciGUI:
         except Exception as e:
             self.log_message(f"Failed to load settings: {e}")
         self._on_mode_changed_settings()
+        self._on_grinding_toggle()
     
     def reset_settings(self):
         """Reset settings to defaults"""
@@ -2638,6 +2978,9 @@ class GrattaEVinciGUI:
             self.difficulty_var.set("low")
             self.wait_selected_var.set(False)
             self.grinding_mode_var.set(False)
+            self.grinding_range_var.set(0.5)
+            self.grinding_p_random_var.set(False)
+            self._on_grinding_toggle()
 
             self.play_x_var.set(2196)
             self.play_y_var.set(1616)
