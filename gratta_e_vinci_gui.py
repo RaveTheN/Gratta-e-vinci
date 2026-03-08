@@ -198,10 +198,17 @@ class CoordinateRecorder:
         if self._closed:
             return True
 
+        left_button_down = getattr(mouse.Listener, "WM_LBUTTONDOWN", None)
+        left_button_up = getattr(mouse.Listener, "WM_LBUTTONUP", None)
         right_button_down = getattr(mouse.Listener, "WM_RBUTTONDOWN", None)
         right_button_up = getattr(mouse.Listener, "WM_RBUTTONUP", None)
 
-        if msg == right_button_down:
+        if msg == left_button_down:
+            self.app.root.after(0, lambda: self._record_and_advance(data.pt.x, data.pt.y))
+            self.mouse_listener.suppress_event()
+        elif msg == left_button_up:
+            self.mouse_listener.suppress_event()
+        elif msg == right_button_down:
             self.app.root.after(0, self._go_back)
             self.mouse_listener.suppress_event()
         elif msg == right_button_up:
@@ -2328,7 +2335,7 @@ class GrattaEVinciGUI:
             if self.current_cash >= target_win:
                 self.log_message("🎉 Reached target win!")
                 break
-            if self.loss >= max_loss and not self.grinding_active:
+            if self.loss >= max_loss:
                 self.log_message("💸 Reached maximum loss!")
                 break
             if self.current_cash < self.bet:
@@ -2588,9 +2595,10 @@ class GrattaEVinciGUI:
 
                     # Calculate loss
                     self.loss = max(0, round(self.highest_cash - self.current_cash, 2))
-                    if self.loss >= self.max_loss_var.get() and not self.grinding_active:
+                    if self.loss >= self.max_loss_var.get():
                         self.log_message("[STOP] Reached maximum loss!")
                         self.game_running = False
+                        round_active = False
                         break
 
                 else:
