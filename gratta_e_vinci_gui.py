@@ -2561,7 +2561,7 @@ class GrattaEVinciGUI:
                         self.grinding_active = True
                         self.log_message(
                             f"[GRIND] Attivato dopo perdita all'ultimo step: ripeto b={GRINDING_STEP['b']:.1f}, "
-                            f"p={GRINDING_STEP['p']}, d={GRINDING_STEP['d']} fino a saldo >= "
+                            f"p={self.max_picks_var.get()}, d={GRINDING_STEP['d']} fino a saldo >= "
                             f"{self.format_money(self.grinding_saved_balance)}"
                         )
 
