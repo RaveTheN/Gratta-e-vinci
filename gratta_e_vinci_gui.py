@@ -2729,7 +2729,7 @@ class GrattaEVinciGUI:
         filename = filedialog.asksaveasfilename(
             title="Export Log",
             defaultextension=".txt",
-            initialname=default_filename,
+            initialfile=default_filename,
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
         )
         
