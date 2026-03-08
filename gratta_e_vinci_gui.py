@@ -1894,7 +1894,6 @@ class GrattaEVinciGUI:
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
         self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)  # Increase bet to next value and round
-        self.log_message(f"📈 Bet increased to: {self.format_money(self.bet)}")
     
     async def decrease_bet(self):
         await asyncio.sleep(self.sleep_decrease_bet_var.get())
@@ -1905,7 +1904,6 @@ class GrattaEVinciGUI:
         # Update bet value using the same logic as playM.py
         current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
         self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)  # Decrease bet to previous value and round
-        self.log_message(f"📉 Bet decreased to: {self.format_money(self.bet)}")
     
     async def decrease_bet_force(self):
         """Force decrease bet to minimum"""
@@ -1935,12 +1933,16 @@ class GrattaEVinciGUI:
         if target_bet not in self.bet_values:
             self.log_message(f"[WARN] Bet {self.format_money(target_bet)} non valida per set_bet_value")
             return
+        old_bet = self.bet
         while self.bet < target_bet:
             await self.increase_bet()
         while self.bet > target_bet:
             await self.decrease_bet()
+        if self.bet != old_bet:
+            direction = "📈" if self.bet > old_bet else "📉"
+            self.log_message(f"{direction} Bet: {self.format_money(old_bet)} → {self.format_money(self.bet)}")
 
-    async def decrease_difficulty_force(self):
+    async def decrease_difficulty_force(self, silent=False):
         """Force difficulty to minimum (low) by clicking lower_difficulty many times"""
         lx = self.lower_diff_x_var.get()
         ly = self.lower_diff_y_var.get()
@@ -1950,14 +1952,14 @@ class GrattaEVinciGUI:
             await asyncio.sleep(self.sleep_decrease_diff_force_var.get())
             pyautogui.click(lx, ly)
         self.current_difficulty = "low"
-        self.log_message("🔽 Difficoltà forzata al minimo (low)")
+        if not silent:
+            self.log_message("🔽 Difficoltà forzata al minimo (low)")
 
     async def set_difficulty(self, target_difficulty):
         """Forza al minimo poi alza alla difficoltà target: low/medium/high"""
         if self.current_difficulty == target_difficulty:
-            self.log_message(f"[DIFF] Difficoltà già impostata a {target_difficulty}, nessun cambio necessario")
             return
-        await self.decrease_difficulty_force()
+        await self.decrease_difficulty_force(silent=True)
         rx = self.raise_diff_x_var.get()
         ry = self.raise_diff_y_var.get()
         if rx == 0 and ry == 0:
@@ -2452,11 +2454,11 @@ class GrattaEVinciGUI:
                 clicked_tile_position = self.tiles[tile_number]
                 color = self.read_color_at_point(clicked_tile_position)
 
-                # Print the actual color values detected
-                self.log_message(
-                    f"[COLOR] Tile {tile_number} ({clicked_tile_position.x}, {clicked_tile_position.y}): "
-                    f"RGB({color['r']}, {color['g']}, {color['b']})"
-                )
+                # Debug: log raw RGB of each tile — utile per calibrare i range di colore
+                # self.log_message(
+                #     f"[COLOR] Tile {tile_number} ({clicked_tile_position.x}, {clicked_tile_position.y}): "
+                #     f"RGB({color['r']}, {color['g']}, {color['b']})"
+                # )
 
                 if self.is_color_in_range_blue(color, self.target_blue):
                     # BLUE tile found
