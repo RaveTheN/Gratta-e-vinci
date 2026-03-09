@@ -50,8 +50,17 @@ Il progetto ha due implementazioni principali:
 
 ### Implementazione Python (principale)
 - **GUI completa** con Tkinter (`gratta_e_vinci_gui.py`)
-- **Motore di automazione** con `pyautogui` per il controllo del mouse
-- **Rilevamento colori** tramite screenshot e lettura pixel
+- **GameEngine** (`game_engine.py`) per loop di gioco, stato e strategia
+- **ColorDetector** (`color_detector.py`) per lettura pixel e classificazione colori
+- **CoordinateManager** (`coordinate_manager.py`) per griglia coordinate e recorder
+- **SettingsManager** (`settings_manager.py`) per load/save/validazione impostazioni
+
+### Boundary modulo (Phase 2)
+- `gratta_e_vinci_gui.py`: UI Tkinter, binding widget, dialog, orchestrazione
+- `game_engine.py`: logica runtime e test mode tramite adapter I/O
+- `color_detector.py`: logica colore riusabile
+- `coordinate_manager.py`: calcolo coordinate e recorder
+- `settings_manager.py`: persistenza JSON e default/schema merge
 
 ### Implementazione JavaScript (legacy)
 - Versione precedente con `nut-js` per il controllo del mouse

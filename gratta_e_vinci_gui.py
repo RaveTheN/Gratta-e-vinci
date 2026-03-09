@@ -12,6 +12,12 @@ import time
 from pynput import keyboard, mouse
 import json
 import os
+import color_detector
+import coordinate_manager
+import game_engine
+import settings_manager
+from color_detector import ColorDetector
+from coordinate_manager import CoordinateManager, CoordinateRecorder
 from game_config import (
     Point,
     BETTING_MODES,
@@ -25,325 +31,8 @@ from game_config import (
     TEST_MODE_MINE_CONFIG,
     format_money,
 )
-
-
-class CoordinateRecorder:
-    def __init__(self, app):
-        self.app = app
-        self.steps = self._build_steps()
-        self.current_step = 0
-        self.recorded = {}
-        self.overlay = None
-        self.mouse_listener = None
-        self.kb_listener = None
-        self.step_counter_label = None
-        self.instruction_label = None
-        self.status_label = None
-        self.step_labels = []
-        self._closed = False
-
-    def _build_steps(self):
-        return [
-            {"label": "Tile 1", "type": "xy", "var_key": 1},
-            {"label": "Tile 2", "type": "x_only", "var_key": 2},
-            {"label": "Tile 3", "type": "x_only", "var_key": 3},
-            {"label": "Tile 4", "type": "x_only", "var_key": 4},
-            {"label": "Tile 5", "type": "x_only", "var_key": 5},
-            {"label": "Tile 6", "type": "y_only", "var_key": 6},
-            {"label": "Tile 11", "type": "y_only", "var_key": 11},
-            {"label": "Tile 16", "type": "y_only", "var_key": 16},
-            {"label": "Tile 21", "type": "y_only", "var_key": 21},
-            {
-                "label": "Play/Collect Button",
-                "type": "xy",
-                "var_key": ("play_x_var", "play_y_var"),
-            },
-            {
-                "label": "Raise Bet Button",
-                "type": "xy",
-                "var_key": ("raise_x_var", "raise_y_var"),
-            },
-            {
-                "label": "Lower Bet Button",
-                "type": "xy",
-                "var_key": ("lower_x_var", "lower_y_var"),
-            },
-            {
-                "label": "Raise Difficulty Button",
-                "type": "xy",
-                "var_key": ("raise_diff_x_var", "raise_diff_y_var"),
-            },
-            {
-                "label": "Lower Difficulty Button",
-                "type": "xy",
-                "var_key": ("lower_diff_x_var", "lower_diff_y_var"),
-            },
-        ]
-
-    def start(self):
-        existing = getattr(self.app, "coordinate_recorder", None)
-        if existing and existing is not self:
-            existing._cancel()
-
-        self.app.coordinate_recorder = self
-        self._create_overlay()
-
-        try:
-            self.mouse_listener = mouse.Listener(
-                on_click=self._on_click,
-                win32_event_filter=self._win32_mouse_event_filter,
-            )
-            self.kb_listener = keyboard.Listener(on_press=self._on_key)
-            self.mouse_listener.start()
-            self.kb_listener.start()
-        except Exception as e:
-            self._cancel()
-            messagebox.showerror("Coordinate Recorder", f"Unable to start listeners:\n{e}")
-
-    def _create_overlay(self):
-        self.app.root.update_idletasks()
-        base_x = max(0, self.app.root.winfo_rootx() + 40)
-        base_y = max(0, self.app.root.winfo_rooty() + 40)
-
-        self.overlay = tk.Toplevel(self.app.root)
-        self.overlay.title("Recording Coordinates")
-        self.overlay.geometry(f"600x500+{base_x}+{base_y}")
-        self.overlay.resizable(False, False)
-        self.overlay.attributes("-topmost", True)
-        self.overlay.protocol("WM_DELETE_WINDOW", self._cancel)
-
-        main_frame = tk.Frame(self.overlay, bg="#F5F7FB", padx=12, pady=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        title_label = tk.Label(
-            main_frame,
-            text="Recording Coordinates",
-            font=("Arial", 13, "bold"),
-            bg="#F5F7FB",
-            fg="#1F2937",
-        )
-        title_label.pack(anchor="w")
-
-        self.step_counter_label = tk.Label(
-            main_frame,
-            font=("Arial", 10),
-            bg="#F5F7FB",
-            fg="#475569",
-        )
-        self.step_counter_label.pack(anchor="w", pady=(4, 0))
-
-        self.instruction_label = tk.Label(
-            main_frame,
-            font=("Arial", 12, "bold"),
-            bg="#F5F7FB",
-            fg="#0F172A",
-            justify=tk.LEFT,
-            anchor="w",
-            wraplength=345,
-        )
-        self.instruction_label.pack(fill=tk.X, pady=(8, 2))
-
-        self.status_label = tk.Label(
-            main_frame,
-            font=("Arial", 10),
-            bg="#F5F7FB",
-            fg="#B45309",
-            justify=tk.LEFT,
-            anchor="w",
-        )
-        self.status_label.pack(fill=tk.X, pady=(0, 8))
-
-        steps_frame = tk.Frame(main_frame, bg="#FFFFFF", bd=1, relief=tk.SOLID)
-        steps_frame.pack(fill=tk.BOTH, expand=True)
-
-        for col in range(2):
-            steps_frame.grid_columnconfigure(col, weight=1)
-
-        for idx, step in enumerate(self.steps):
-            row = idx % 7
-            col = idx // 7
-            step_label = tk.Label(
-                steps_frame,
-                text=step["label"],
-                anchor="w",
-                justify=tk.LEFT,
-                font=("Arial", 8),
-                padx=6,
-                pady=2,
-                bg="#FFFFFF",
-                fg="#334155",
-            )
-            step_label.grid(row=row, column=col, sticky="ew", padx=2, pady=1)
-            self.step_labels.append(step_label)
-
-        footer_label = tk.Label(
-            main_frame,
-            text="← → navigate  |  Right-click = redo  |  Enter = save  |  ESC = cancel",
-            font=("Arial", 8),
-            bg="#F5F7FB",
-            fg="#475569",
-            wraplength=345,
-            justify=tk.CENTER,
-        )
-        footer_label.pack(fill=tk.X, pady=(8, 0))
-
-        self.overlay.lift()
-        self.overlay.focus_force()
-        self._update_overlay()
-
-    def _win32_mouse_event_filter(self, msg, data):
-        if self._closed:
-            return True
-
-        left_button_down = getattr(mouse.Listener, "WM_LBUTTONDOWN", None)
-        left_button_up = getattr(mouse.Listener, "WM_LBUTTONUP", None)
-        right_button_down = getattr(mouse.Listener, "WM_RBUTTONDOWN", None)
-        right_button_up = getattr(mouse.Listener, "WM_RBUTTONUP", None)
-
-        if msg == left_button_down:
-            self.app.root.after(0, lambda: self._record_and_advance(data.pt.x, data.pt.y))
-            self.mouse_listener.suppress_event()
-        elif msg == left_button_up:
-            self.mouse_listener.suppress_event()
-        elif msg == right_button_down:
-            self.app.root.after(0, self._go_back)
-            self.mouse_listener.suppress_event()
-        elif msg == right_button_up:
-            self.mouse_listener.suppress_event()
-
-        return True
-
-    def _update_overlay(self):
-        if not self.overlay or not self.overlay.winfo_exists():
-            return
-
-        step = self.steps[self.current_step]
-        type_suffix = {"xy": "", "x_only": " (X position)", "y_only": " (Y position)"}
-        short_suffix = {"xy": "", "x_only": " (X)", "y_only": " (Y)"}
-
-        self.step_counter_label.config(text=f"Step {self.current_step + 1} / {len(self.steps)}")
-        self.instruction_label.config(text=f"Click on: {step['label']}{type_suffix[step['type']]}")
-
-        coords = self.recorded.get(self.current_step)
-        if coords:
-            self.status_label.config(text=f"Recorded: ({coords[0]}, {coords[1]})", fg="#166534")
-        else:
-            self.status_label.config(text="Not recorded yet", fg="#B45309")
-
-        for idx, label in enumerate(self.step_labels):
-            current_step = self.steps[idx]
-            marker = "✓" if idx in self.recorded else "•"
-            bg = "#DBEAFE" if idx == self.current_step else "#FFFFFF"
-            fg = "#0F172A" if idx == self.current_step else "#334155"
-            font = ("Arial", 8, "bold") if idx == self.current_step else ("Arial", 8)
-            label.config(
-                text=f"{marker} {idx + 1}. {current_step['label']}{short_suffix[current_step['type']]}",
-                bg=bg,
-                fg=fg,
-                font=font,
-            )
-
-    def _on_click(self, x, y, button, pressed):
-        if not pressed or self._closed:
-            return
-
-        if button == mouse.Button.left:
-            self.app.root.after(0, lambda: self._record_and_advance(x, y))
-        elif button == mouse.Button.right:
-            self.app.root.after(0, self._go_back)
-
-    def _on_key(self, key):
-        if self._closed:
-            return
-
-        if key == keyboard.Key.esc:
-            self.app.root.after(0, self._cancel)
-        elif key == keyboard.Key.enter:
-            self.app.root.after(0, self._save_and_close)
-        elif key == keyboard.Key.left:
-            self.app.root.after(0, lambda: self._navigate(-1))
-        elif key == keyboard.Key.right:
-            self.app.root.after(0, lambda: self._navigate(1))
-
-    def _record_and_advance(self, x, y):
-        if self._closed:
-            return
-
-        self.recorded[self.current_step] = (int(x), int(y))
-        if self.current_step < len(self.steps) - 1:
-            self.current_step += 1
-        self._update_overlay()
-
-    def _go_back(self):
-        if self._closed:
-            return
-
-        target_step = self.current_step
-        if target_step not in self.recorded and target_step > 0:
-            target_step -= 1
-
-        self.current_step = target_step
-        self.recorded.pop(target_step, None)
-        self._update_overlay()
-
-    def _navigate(self, delta):
-        if self._closed:
-            return
-
-        self.current_step = max(0, min(len(self.steps) - 1, self.current_step + delta))
-        self._update_overlay()
-
-    def _cancel(self):
-        if self._closed:
-            return
-
-        self._closed = True
-        self._stop_listeners()
-        if self.overlay and self.overlay.winfo_exists():
-            self.overlay.destroy()
-        self.overlay = None
-        if getattr(self.app, "coordinate_recorder", None) is self:
-            self.app.coordinate_recorder = None
-
-    def _save_and_close(self):
-        if self._closed:
-            return
-
-        for step_index, coords in self.recorded.items():
-            step = self.steps[step_index]
-            x, y = coords
-
-            if step["type"] == "xy":
-                if isinstance(step["var_key"], int):
-                    x_var, y_var = self.app.tile_vars[step["var_key"]]
-                    x_var.set(x)
-                    y_var.set(y)
-                else:
-                    x_name, y_name = step["var_key"]
-                    getattr(self.app, x_name).set(x)
-                    getattr(self.app, y_name).set(y)
-            elif step["type"] == "x_only":
-                self.app.tile_vars[step["var_key"]][0].set(x)
-            elif step["type"] == "y_only":
-                self.app.tile_vars[step["var_key"]][1].set(y)
-
-        if hasattr(self.app, "update_all_tiles"):
-            self.app.root.after(0, self.app.update_all_tiles)
-
-        self._cancel()
-
-    def _stop_listeners(self):
-        for listener_name in ("mouse_listener", "kb_listener"):
-            listener = getattr(self, listener_name)
-            if not listener:
-                continue
-
-            try:
-                listener.stop()
-            except Exception:
-                pass
-            finally:
-                setattr(self, listener_name, None)
+from game_engine import GameEngine, TkAutomationAdapter
+from settings_manager import SettingsManager
 
 class GrattaEVinciGUI:
     def __init__(self, root):
@@ -351,11 +40,16 @@ class GrattaEVinciGUI:
         self.root.title("Gratta-e-Vinci Automation v2.0")
         self.root.geometry("900x1000")
         self.root.resizable(True, True)
+        self.settings_path = "gratta_settings.json"
+        self.settings_manager = SettingsManager()
+        self.coordinate_manager = CoordinateManager()
         
         # Initialize variables
         self.mouse_monitoring = False
         self.game_running = False
         self.escape_pressed = False
+        self.stop_event = threading.Event()
+        self.running_event = threading.Event()
         self.keyboard_listener = None
         
         # Game variables
@@ -378,6 +72,10 @@ class GrattaEVinciGUI:
         # Target colors (from game_config)
         self.target_blue = dict(TARGET_BLUE)
         self.target_red = dict(TARGET_RED)
+        self.color_tolerance_var = tk.IntVar(value=COLOR_TOLERANCE)
+        self.color_detector = ColorDetector(self.target_blue, self.target_red, self.color_tolerance_var.get())
+        self.color_tolerance_var.trace_add("write", self._on_color_tolerance_changed)
+        self.game_engine = GameEngine(self, TkAutomationAdapter(self, self.color_detector))
         
         # Tiles dictionary (will be configurable)
         self.tiles = {}
@@ -412,7 +110,7 @@ class GrattaEVinciGUI:
         
         # Create GUI
         self.create_widgets()
-        self.load_settings()
+        self.on_load_settings()
         
         # Start mouse coordinate monitoring
         self.start_mouse_monitoring()
@@ -520,9 +218,9 @@ class GrattaEVinciGUI:
         self.diff_combo['values'] = ("low", "medium", "high")
         self.diff_combo.grid(row=3, column=1, padx=5, pady=2)
 
-        # Betting Mode Editor Button
-        self.settings_mode_editor_button = ttk.Button(game_frame, text="Edit Modes", command=self.open_selected_mode_editor)
-        self.settings_mode_editor_button.grid(row=3, column=2, columnspan=2, padx=5, pady=2)
+        # Color tolerance
+        ttk.Label(game_frame, text="Color Tolerance:").grid(row=3, column=2, sticky=tk.W, pady=2)
+        ttk.Entry(game_frame, textvariable=self.color_tolerance_var, width=12).grid(row=3, column=3, padx=5, pady=2)
 
         # Wait between rounds
         self.wait_selected_var = tk.BooleanVar()
@@ -543,6 +241,10 @@ class GrattaEVinciGUI:
         self.grinding_p_random_cb = ttk.Checkbutton(game_frame, text="p random (fallback)",
                                                      variable=self.grinding_p_random_var)
         self.grinding_p_random_cb.grid(row=5, column=2, columnspan=2, sticky=tk.W, pady=2)
+
+        # Betting Mode Editor Button
+        self.settings_mode_editor_button = ttk.Button(game_frame, text="Edit Modes", command=self.open_selected_mode_editor)
+        self.settings_mode_editor_button.grid(row=6, column=0, columnspan=2, padx=5, pady=2, sticky=tk.W)
         
         # Control Points Frame
         control_frame = ttk.LabelFrame(parent, text="Control Points", padding=10)
@@ -587,8 +289,8 @@ class GrattaEVinciGUI:
         button_frame = ttk.Frame(parent)
         button_frame.pack(fill=tk.X, padx=5, pady=10)
         
-        ttk.Button(button_frame, text="Save Settings", command=self.save_settings).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Load Settings", command=self.load_settings).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Save Settings", command=self.on_save_settings).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Load Settings", command=self.on_load_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Reset to Defaults", command=self.reset_settings).pack(side=tk.LEFT, padx=5)
     
     def _on_mode_changed_settings(self):
@@ -605,6 +307,16 @@ class GrattaEVinciGUI:
         state = tk.NORMAL if self.grinding_mode_var.get() else tk.DISABLED
         self.grinding_range_entry.config(state=state)
         self.grinding_p_random_cb.config(state=state)
+
+    def _on_color_tolerance_changed(self, *_):
+        try:
+            tolerance = max(1, min(255, int(self.color_tolerance_var.get())))
+            if tolerance != int(self.color_tolerance_var.get()):
+                self.color_tolerance_var.set(tolerance)
+                return
+            self.color_detector.tolerance = tolerance
+        except Exception:
+            return
 
     def get_grinding_picks(self):
         """Return the minimum p (1-3) that would recover grinding_saved_balance, or fallback."""
@@ -931,48 +643,13 @@ class GrattaEVinciGUI:
         def update_all_tiles():
             """Update all 25 tile positions based on the input coordinates"""
             try:
-                # Get reference coordinates
-                base_x = x1_var.get()
-                base_y = y1_var.get()
-                
-                # Get top row X coordinates
-                x_coords = [base_x] + [var.get() for var in x_vars_top]
-                
-                # Get left column Y coordinates  
-                y_coords = [base_y] + [var.get() for var in y_vars_left]
-                
-                # Generate all 25 tiles
-                for tile_num in range(1, 26):
-                    row = (tile_num - 1) // 5
-                    col = (tile_num - 1) % 5
-                    
-                    x = x_coords[col]
-                    y = y_coords[row]
-                    
-                    # Always update or create the tile variables with correct values
-                    if tile_num not in self.tile_vars:
-                        # Create new vars for tiles that don't exist yet
-                        x_var = tk.IntVar(value=x)
-                        y_var = tk.IntVar(value=y)
-                        self.tile_vars[tile_num] = (x_var, y_var)
-                    else:
-                        # Update existing tile coordinates
-                        current_x_var, current_y_var = self.tile_vars[tile_num]
-                        
-                        # For tiles 1, 2-5, 6,11,16,21 - these are input tiles, don't override them
-                        if tile_num == 1:
-                            # Tile 1 is the reference, already has correct values
-                            pass
-                        elif tile_num in [2, 3, 4, 5]:
-                            # These share Y with tile 1, but have their own X - don't override
-                            pass
-                        elif tile_num in [6, 11, 16, 21]:
-                            # These share X with tile 1, but have their own Y - don't override
-                            pass
-                        else:
-                            # For all other tiles (calculated ones), update the values
-                            current_x_var.set(x)
-                            current_y_var.set(y)
+                self.coordinate_manager.populate_tile_vars(
+                    self.tile_vars,
+                    x1_var.get(),
+                    y1_var.get(),
+                    x_vars_top,
+                    y_vars_left,
+                )
             except Exception as e:
                 print(f"Error in update_all_tiles: {e}")
 
@@ -1004,28 +681,14 @@ class GrattaEVinciGUI:
         def update_preview():
             """Update the tile preview display"""
             try:
-                preview_text = "Calculated tile coordinates (5x5 grid):\n"
-                preview_text += "-" * 50 + "\n"
-                
-                for row in range(5):
-                    row_text = ""
-                    for col in range(5):
-                        tile_num = row * 5 + col + 1
-                        if tile_num in self.tile_vars:
-                            x = self.tile_vars[tile_num][0].get()
-                            y = self.tile_vars[tile_num][1].get()
-                            row_text += f"T{tile_num:2d}({x:4d},{y:4d}) "
-                        else:
-                            row_text += f"T{tile_num:2d}(----,----) "
-                    preview_text += row_text + "\n"
-                
+                preview_text = self.coordinate_manager.build_preview_text(self.tile_vars)
                 # Update the preview
                 self.tile_preview_text.config(state=tk.NORMAL)
                 self.tile_preview_text.delete(1.0, tk.END)
                 self.tile_preview_text.insert(tk.END, preview_text)
                 self.tile_preview_text.config(state=tk.DISABLED)
-            except:
-                pass  # Ignore errors during UI updates
+            except Exception as e:
+                self.log_message(f"[WARN] Coordinate preview update failed: {e}")
         
         # Bind preview updates to coordinate changes
         def on_preview_update(*args):
@@ -1803,7 +1466,7 @@ class GrattaEVinciGUI:
 
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(fill=tk.X, padx=5, pady=10)
-        ttk.Button(btn_frame, text="Salva pause", command=self.save_settings).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Salva pause", command=self.on_save_settings).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_frame, text="Reset valori default", command=reset_pauses).pack(side=tk.LEFT)
 
     def start_mouse_monitoring(self):
@@ -1824,7 +1487,8 @@ class GrattaEVinciGUI:
                     self.root.after(0, lambda: self.settings_coord_label.config(text=coord_text))
                 
                 time.sleep(0.1)
-            except:
+            except Exception as e:
+                self.log_message(f"[WARN] Mouse monitor stopped due to error: {e}")
                 break
     
     def open_betting_mode_editor(self):
@@ -2165,7 +1829,7 @@ class GrattaEVinciGUI:
         self.log_message(f"🎲 Generated random tile: {tile_number}")
         return tile_number
     
-    def read_color_at_point(self, point):
+    def _read_color_at_point_legacy(self, point):
         """Read color at a point on screen"""
         try:
             # Take screenshot
@@ -2206,12 +1870,12 @@ class GrattaEVinciGUI:
         """Start the automated game"""
         if self.game_running:
             return
-        
-        # Validate settings
-        if not self.validate_settings():
+        try:
+            self.game_engine.validate_settings()
+        except Exception as e:
+            messagebox.showerror("Invalid Settings", str(e))
             return
-        
-        # Confirm real game start
+
         if not messagebox.askyesno("Start Real Game", 
                                   "⚠️ WARNING: This will start REAL game automation!\n\n"
                                   "• Mouse will be controlled automatically\n"
@@ -2223,22 +1887,16 @@ class GrattaEVinciGUI:
         
         self.game_running = True
         self.escape_pressed = False
+        self.stop_event.clear()
+        self.running_event.set()
         
         # Update UI
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
-        
-        # Initialize game variables
-        self.initialize_game_variables()
-        
-        # Update tiles from GUI
-        self.update_tiles_from_gui()
-        
-        # Start game in separate thread
-        threading.Thread(target=self.run_game_async, daemon=True).start()
-        
-        # Start keyboard listener
-        self.start_keyboard_listener()
+        self.game_engine.initialize_game_variables()
+        self.game_engine.update_tiles_from_gui()
+        threading.Thread(target=self.game_engine.run_game_async, daemon=True).start()
+        self.game_engine.start_keyboard_listener()
         
         self.log_message("🎰 REAL GAME STARTED!")
         self.log_message("⚠️ AUTOMATION ACTIVE - Mouse will be controlled!")
@@ -2249,14 +1907,14 @@ class GrattaEVinciGUI:
         """Stop the automated game or test mode"""
         self.game_running = False
         self.escape_pressed = True
+        self.stop_event.set()
+        self.running_event.clear()
         
         # Update UI
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         
-        # Stop keyboard listener if it exists
-        if self.keyboard_listener:
-            self.keyboard_listener.stop()
+        self.game_engine.stop_keyboard_listener()
         
         self.log_message("🛑 GAME/TEST STOPPED by user")
     
@@ -2266,17 +1924,22 @@ class GrattaEVinciGUI:
             self.log_message("⚠️ Game already running! Stop current game first.")
             return
 
-        if not self.validate_settings():
+        try:
+            self.game_engine.validate_settings()
+        except Exception as e:
+            messagebox.showerror("Invalid Settings", str(e))
             return
 
         self.game_running = True
         self.escape_pressed = False
+        self.stop_event.clear()
+        self.running_event.set()
 
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
 
-        self.initialize_game_variables()
-        initial_config = self._get_round_config_for_strategy()
+        self.game_engine.initialize_game_variables()
+        initial_config = self.game_engine._get_round_config_for_strategy()
 
         difficulty_text = initial_config["round_difficulty"]
         picks_text = str(initial_config["max_picks"])
@@ -2303,7 +1966,7 @@ class GrattaEVinciGUI:
         self.progress_label.config(text="TEST MODE running...")
         self.update_stats_display()
         
-        threading.Thread(target=self.run_test_mode, daemon=True).start()
+        threading.Thread(target=self.game_engine.run_test_mode, daemon=True).start()
     
     def run_test_mode(self):
         """Run game simulation for testing"""
@@ -2440,9 +2103,7 @@ class GrattaEVinciGUI:
     
     def update_tiles_from_gui(self):
         """Update tiles dictionary from GUI values"""
-        self.tiles = {}
-        for tile_num, (x_var, y_var) in self.tile_vars.items():
-            self.tiles[tile_num] = Point(x_var.get(), y_var.get())
+        self.tiles = self.coordinate_manager.build_tile_points(self.tile_vars)
     
     def start_keyboard_listener(self):
         """Start keyboard listener for escape key"""
@@ -2461,11 +2122,11 @@ class GrattaEVinciGUI:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self.main_game_loop())
+            loop.run_until_complete(self._main_game_loop_legacy())
         finally:
             loop.close()
     
-    async def main_game_loop(self):
+    async def _main_game_loop_legacy(self):
         """Main game loop with actual game automation"""
         max_rounds = self.max_rounds_var.get()
         target_win = self.target_win_var.get()
@@ -2512,7 +2173,7 @@ class GrattaEVinciGUI:
                 await asyncio.sleep(wait_time)
             
             # Start new round - actual game automation
-            await self.play_real_game_round()
+            await self._play_real_game_round_legacy()
             
             # Update statistics
             self.root.after(0, self.update_stats_display)
@@ -2527,7 +2188,7 @@ class GrattaEVinciGUI:
         self.log_message(f"Highest cash: {self.format_money(self.highest_cash)}")
         self.log_message(f"Highest bet: {self.format_money(self.highest_bet)}")
     
-    async def play_real_game_round(self):
+    async def _play_real_game_round_legacy(self):
         """Play an actual game round with mouse automation"""
         round_config = self._get_round_config_for_strategy()
         selected_mode_name = round_config["selected_mode_name"]
@@ -2597,7 +2258,7 @@ class GrattaEVinciGUI:
 
                 # Get the position of the tile we just clicked
                 clicked_tile_position = self.tiles[tile_number]
-                color = self.read_color_at_point(clicked_tile_position)
+                color = self._read_color_at_point_legacy(clicked_tile_position)
 
                 # Debug: log raw RGB of each tile — utile per calibrare i range di colore
                 # self.log_message(
@@ -2739,7 +2400,8 @@ class GrattaEVinciGUI:
                     self.log_message(f"[COLOR] Tile {tile_number} - Unknown color (attempt {retry_count})")
                     self.log_message("   Expected: Blue RGB(1,108,238) or Red RGB(200,13,1)")
                     self.log_message(f"   Actual: RGB({color['r']}, {color['g']}, {color['b']})")
-                    self.log_message("   Waiting 1 second and retrying color detection...")
+                    self.log_message(f"   Tolerance used: {self.color_detector.tolerance}")
+                    self.log_message(f"   Waiting {self.sleep_color_retry_var.get()} second(s) and retrying color detection...")
                     await asyncio.sleep(self.sleep_color_retry_var.get())
 
         # Round completed, increment round counter
@@ -2971,20 +2633,148 @@ class GrattaEVinciGUI:
     def _save_custom_mode_silent(self):
         """Salva il custom_mode nel JSON senza mostrare messagebox."""
         try:
-            settings = {}
-            if os.path.exists("gratta_settings.json"):
-                with open("gratta_settings.json", "r") as f:
-                    settings = json.load(f)
-            settings["custom_mode"] = self.custom_mode
-            settings["difficulty"] = self.difficulty_var.get()
-            settings["mode"] = self.mode_var.get()
-            with open("gratta_settings.json", "w") as f:
-                json.dump(settings, f, indent=2)
+            self.settings_manager.save_custom_mode(
+                self.settings_path,
+                self.custom_mode,
+                self.mode_var.get(),
+                self.difficulty_var.get(),
+            )
             self.log_message("💾 Custom mode salvato automaticamente nel JSON")
         except Exception as e:
             self.log_message(f"⚠️ Errore salvataggio automatico custom mode: {e}")
 
-    def save_settings(self):
+    def _collect_settings_payload(self):
+        return {
+            "starting_cash": self.starting_cash_var.get(),
+            "target_win": self.target_win_var.get(),
+            "max_loss": self.max_loss_var.get(),
+            "max_rounds": self.max_rounds_var.get(),
+            "max_picks": self.max_picks_var.get(),
+            "mode": self.mode_var.get(),
+            "wait_selected": self.wait_selected_var.get(),
+            "grinding_mode": self.grinding_mode_var.get(),
+            "grinding_range": self.grinding_range_var.get(),
+            "grinding_p_random": self.grinding_p_random_var.get(),
+            "play_x": self.play_x_var.get(),
+            "play_y": self.play_y_var.get(),
+            "raise_x": self.raise_x_var.get(),
+            "raise_y": self.raise_y_var.get(),
+            "lower_x": self.lower_x_var.get(),
+            "lower_y": self.lower_y_var.get(),
+            "raise_diff_x": self.raise_diff_x_var.get(),
+            "raise_diff_y": self.raise_diff_y_var.get(),
+            "lower_diff_x": self.lower_diff_x_var.get(),
+            "lower_diff_y": self.lower_diff_y_var.get(),
+            "difficulty": self.difficulty_var.get(),
+            "custom_mode": self.custom_mode,
+            "tiles": {str(num): [x_var.get(), y_var.get()] for num, (x_var, y_var) in self.tile_vars.items()},
+            "betting_modes": self.betting_modes,
+            "init_steps": self.init_steps,
+            "sleep_play_or_collect": self.sleep_play_or_collect_var.get(),
+            "sleep_increase_bet": self.sleep_increase_bet_var.get(),
+            "sleep_decrease_bet": self.sleep_decrease_bet_var.get(),
+            "sleep_decrease_bet_force": self.sleep_decrease_bet_force_var.get(),
+            "sleep_decrease_diff_force": self.sleep_decrease_diff_force_var.get(),
+            "sleep_set_difficulty": self.sleep_set_difficulty_var.get(),
+            "sleep_click_tile": self.sleep_click_tile_var.get(),
+            "sleep_after_play": self.sleep_after_play_var.get(),
+            "sleep_after_tile_click": self.sleep_after_tile_click_var.get(),
+            "sleep_between_rounds": self.sleep_between_rounds_var.get(),
+            "sleep_after_result": self.sleep_after_result_var.get(),
+            "sleep_color_retry": self.sleep_color_retry_var.get(),
+            "color_tolerance": self.color_tolerance_var.get(),
+            "sleep_init_raise_diff": self.sleep_init_raise_diff_var.get(),
+            "sleep_init_lower_diff": self.sleep_init_lower_diff_var.get(),
+            "sleep_init_click": self.sleep_init_click_var.get(),
+        }
+
+    def _apply_settings_payload(self, settings):
+        self.starting_cash_var.set(settings.get("starting_cash", 2001.50))
+        self.target_win_var.set(settings.get("target_win", 2100.0))
+        self.max_loss_var.set(settings.get("max_loss", 10.0))
+        self.max_rounds_var.set(settings.get("max_rounds", 100))
+        self.max_picks_var.set(settings.get("max_picks", 3))
+        self.mode_var.set(settings.get("mode", "normal"))
+        self.wait_selected_var.set(settings.get("wait_selected", False))
+        self.grinding_mode_var.set(settings.get("grinding_mode", False))
+        self.grinding_range_var.set(settings.get("grinding_range", 0.5))
+        self.grinding_p_random_var.set(settings.get("grinding_p_random", False))
+        self._on_grinding_toggle()
+        self.play_x_var.set(settings.get("play_x", 2196))
+        self.play_y_var.set(settings.get("play_y", 1616))
+        self.raise_x_var.set(settings.get("raise_x", 1900))
+        self.raise_y_var.set(settings.get("raise_y", 1740))
+        self.lower_x_var.set(settings.get("lower_x", 1519))
+        self.lower_y_var.set(settings.get("lower_y", 1740))
+        self.raise_diff_x_var.set(settings.get("raise_diff_x", 0))
+        self.raise_diff_y_var.set(settings.get("raise_diff_y", 0))
+        self.lower_diff_x_var.set(settings.get("lower_diff_x", 0))
+        self.lower_diff_y_var.set(settings.get("lower_diff_y", 0))
+        self.difficulty_var.set(settings.get("difficulty", "low"))
+        self.sleep_play_or_collect_var.set(settings.get("sleep_play_or_collect", 1.0))
+        self.sleep_increase_bet_var.set(settings.get("sleep_increase_bet", 1.0))
+        self.sleep_decrease_bet_var.set(settings.get("sleep_decrease_bet", 1.0))
+        self.sleep_decrease_bet_force_var.set(settings.get("sleep_decrease_bet_force", 0.05))
+        self.sleep_decrease_diff_force_var.set(settings.get("sleep_decrease_diff_force", 0.05))
+        self.sleep_set_difficulty_var.set(settings.get("sleep_set_difficulty", 0.5))
+        self.sleep_click_tile_var.set(settings.get("sleep_click_tile", 1.0))
+        self.sleep_after_play_var.set(settings.get("sleep_after_play", 1.0))
+        self.sleep_after_tile_click_var.set(settings.get("sleep_after_tile_click", 1.0))
+        self.sleep_between_rounds_var.set(settings.get("sleep_between_rounds", 1.0))
+        self.sleep_after_result_var.set(settings.get("sleep_after_result", 2.0))
+        self.sleep_color_retry_var.set(settings.get("sleep_color_retry", 1.0))
+        self.color_tolerance_var.set(settings.get("color_tolerance", COLOR_TOLERANCE))
+        self.color_detector.tolerance = int(self.color_tolerance_var.get())
+        self.sleep_init_raise_diff_var.set(settings.get("sleep_init_raise_diff", 0.4))
+        self.sleep_init_lower_diff_var.set(settings.get("sleep_init_lower_diff", 0.4))
+        self.sleep_init_click_var.set(settings.get("sleep_init_click", 0.3))
+        saved_custom = settings.get("custom_mode", [])
+        if saved_custom and isinstance(saved_custom, list):
+            self.custom_mode = saved_custom
+        tiles = settings.get("tiles", {})
+        for tile_str, coords in tiles.items():
+            tile_num = int(tile_str)
+            if tile_num in self.tile_vars:
+                self.tile_vars[tile_num][0].set(coords[0])
+                self.tile_vars[tile_num][1].set(coords[1])
+        saved_modes = settings.get("betting_modes", {})
+        if saved_modes:
+            for mode_name, mode_values in saved_modes.items():
+                if isinstance(mode_values, list) and all(isinstance(v, (int, float)) for v in mode_values):
+                    self.betting_modes[mode_name] = [round(v, 2) for v in mode_values]
+        loaded_steps = settings.get("init_steps", None)
+        if loaded_steps is not None and isinstance(loaded_steps, list):
+            self.init_steps = loaded_steps
+            if hasattr(self, 'init_tree'):
+                self.refresh_init_tree()
+        self._on_mode_changed_settings()
+        self._on_grinding_toggle()
+
+    def on_save_settings(self):
+        """Save settings using SettingsManager."""
+        payload = self._collect_settings_payload()
+        errors = self.settings_manager.validate(payload)
+        if errors:
+            messagebox.showerror("Error", "\n".join(errors))
+            return
+        try:
+            self.settings_manager.save_settings(self.settings_path, payload)
+            messagebox.showinfo("Saved", "Settings saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save settings: {e}")
+
+    def on_load_settings(self):
+        """Load settings using SettingsManager."""
+        try:
+            settings = self.settings_manager.load_settings(self.settings_path)
+            self._apply_settings_payload(settings)
+            self.log_message("Settings loaded successfully!")
+        except Exception as e:
+            self.log_message(f"Failed to load settings: {e}")
+            self._on_mode_changed_settings()
+            self._on_grinding_toggle()
+
+    def _save_settings_legacy(self):
         """Save settings to file"""
         settings = {
             "starting_cash": self.starting_cash_var.get(),
@@ -3036,7 +2826,7 @@ class GrattaEVinciGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save settings: {e}")
     
-    def load_settings(self):
+    def _load_settings_legacy(self):
         """Load settings from file"""
         try:
             if os.path.exists("gratta_settings.json"):
@@ -3132,6 +2922,8 @@ class GrattaEVinciGUI:
             self.grinding_mode_var.set(False)
             self.grinding_range_var.set(0.5)
             self.grinding_p_random_var.set(False)
+            self.color_tolerance_var.set(COLOR_TOLERANCE)
+            self.color_detector.tolerance = int(self.color_tolerance_var.get())
             self._on_grinding_toggle()
 
             self.play_x_var.set(2196)
@@ -3149,6 +2941,8 @@ class GrattaEVinciGUI:
         """Handle application closing"""
         self.mouse_monitoring = False
         self.game_running = False
+        self.stop_event.set()
+        self.running_event.clear()
         if self.keyboard_listener:
             self.keyboard_listener.stop()
         self.root.destroy()
