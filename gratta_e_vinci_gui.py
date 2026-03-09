@@ -20,6 +20,8 @@ WIN_MULTIPLIERS = {
 }
 
 GRINDING_STEP = {"b": 20.0, "d": "high"}
+TEST_MODE_BOARD_SIZE = 25
+TEST_MODE_MINE_CONFIG = {"low": 3, "medium": 6, "high": 10}
 
 class Point:
     def __init__(self, x, y):
@@ -364,6 +366,7 @@ class GrattaEVinciGUI:
         # Game variables
         self.current_cash = 0
         self.highest_cash = 0
+        self.lowest_cash = 0
         self.bet = 0.1
         self.highest_bet = 0.1
         self.picks = 0
@@ -625,6 +628,208 @@ class GrattaEVinciGUI:
         if self.grinding_p_random_var.get():
             return random.randint(1, 3)
         return 3
+
+    def _get_min_bet_for_selected_mode(self):
+        """Return the first bet for the active strategy."""
+        selected_mode_name = self.mode_var.get()
+        if selected_mode_name == "custom" and self.custom_mode:
+            return round(self.custom_mode[0]["b"], 2)
+        if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
+            return round(self.betting_modes[selected_mode_name][0], 2)
+        return 0.1
+
+    def _get_target_bet_for_try(self, tries=None, selected_mode_name=None):
+        """Resolve the bet for a given try index."""
+        if tries is None:
+            tries = self.tries
+        if selected_mode_name is None:
+            selected_mode_name = self.mode_var.get()
+
+        if selected_mode_name == "custom" and self.custom_mode:
+            step_idx = min(tries, len(self.custom_mode) - 1)
+            return round(self.custom_mode[step_idx]["b"], 2)
+        if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
+            mode_array = self.betting_modes[selected_mode_name]
+            step_idx = min(tries, len(mode_array) - 1)
+            return round(mode_array[step_idx], 2)
+        return 0.1
+
+    def _get_round_config_for_strategy(self):
+        """Resolve picks, difficulty and bet for the current round."""
+        selected_mode_name = self.mode_var.get()
+        grinding_enabled = bool(self.grinding_mode_var.get())
+        step_idx = None
+        max_step_idx = None
+
+        if self.grinding_active:
+            max_picks = self.get_grinding_picks()
+            round_difficulty = GRINDING_STEP["d"]
+            target_bet = round(GRINDING_STEP["b"], 2)
+            strategy_source = "grinding"
+        elif selected_mode_name == "custom" and self.custom_mode:
+            step_idx = min(self.tries, len(self.custom_mode) - 1)
+            max_step_idx = len(self.custom_mode) - 1
+            step_data = self.custom_mode[step_idx]
+            max_picks = step_data["p"]
+            round_difficulty = step_data["d"]
+            target_bet = round(step_data["b"], 2)
+            strategy_source = "custom"
+        else:
+            max_picks = self.max_picks_var.get()
+            round_difficulty = self.difficulty_var.get()
+            target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
+            if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
+                step_idx = min(self.tries, len(self.betting_modes[selected_mode_name]) - 1)
+                max_step_idx = len(self.betting_modes[selected_mode_name]) - 1
+            strategy_source = "standard"
+
+        return {
+            "selected_mode_name": selected_mode_name,
+            "strategy_source": strategy_source,
+            "grinding_enabled": grinding_enabled,
+            "max_picks": max_picks,
+            "round_difficulty": round_difficulty,
+            "target_bet": target_bet,
+            "step_idx": step_idx,
+            "max_step_idx": max_step_idx,
+            "mine_count": TEST_MODE_MINE_CONFIG[round_difficulty],
+            "multiplier": self.get_win_multiplier(round_difficulty, max_picks),
+        }
+
+    def _simulate_test_board(self, round_difficulty, max_picks):
+        """Simulate a 5x5 board and open tiles without replacement."""
+        mine_count = TEST_MODE_MINE_CONFIG[round_difficulty]
+        board = ["mine"] * mine_count + ["coin"] * (TEST_MODE_BOARD_SIZE - mine_count)
+        random.shuffle(board)
+
+        tile_map = {tile_num: board[tile_num - 1] for tile_num in range(1, TEST_MODE_BOARD_SIZE + 1)}
+        available_tiles = list(tile_map.keys())
+        random.shuffle(available_tiles)
+
+        opened_tiles = []
+        coins_found = 0
+        hit_mine = False
+
+        for tile_num in available_tiles[:max_picks]:
+            outcome = tile_map[tile_num]
+            opened_tiles.append({"tile": tile_num, "outcome": outcome})
+            if outcome == "mine":
+                hit_mine = True
+                break
+            coins_found += 1
+
+        return {
+            "mine_count": mine_count,
+            "opened_tiles": opened_tiles,
+            "coins_found": coins_found,
+            "hit_mine": hit_mine,
+        }
+
+    def _apply_test_win(self, round_config):
+        """Apply the result of a winning simulated round."""
+        win_amount = round(self.bet * round_config["multiplier"], 2)
+        self.current_cash = round(self.current_cash + win_amount, 2)
+        self.total_win = round(self.total_win + win_amount, 2)
+        self.log_message(
+            f"[WIN] 💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)}"
+        )
+
+        if self.current_cash > self.highest_cash:
+            self.highest_cash = round(self.current_cash, 2)
+
+        if self.grinding_active:
+            if self.grinding_saved_balance is not None and self.current_cash >= self.grinding_saved_balance:
+                self.grinding_active = False
+                self.tries = 0
+                self.picks = 0
+                self.bet = self._get_min_bet_for_selected_mode()
+                self.log_message(
+                    f"[GRIND] Completed: balance recovered ({self.format_money(self.current_cash)} >= "
+                    f"{self.format_money(self.grinding_saved_balance)}). Bet reset to minimum."
+                )
+            else:
+                self.bet = round(GRINDING_STEP["b"], 2)
+                target_text = self.format_money(self.grinding_saved_balance or 0)
+                self.log_message(
+                    f"[GRIND] Current balance {self.format_money(self.current_cash)} "
+                    f"(target {target_text}), staying on fixed grinding step."
+                )
+        else:
+            self.tries = 0
+            self.picks = 0
+            self.bet = self._get_min_bet_for_selected_mode()
+            self.log_message(f"[WIN] Bet reset to minimum: {self.format_money(self.bet)}")
+
+    def _apply_test_loss(self, round_config):
+        """Apply the result of a losing simulated round."""
+        step_idx = round_config["step_idx"]
+        max_step_idx = round_config["max_step_idx"]
+        grinding_enabled = round_config["grinding_enabled"]
+
+        if grinding_enabled and not self.grinding_active and step_idx == 0:
+            acceptable_range = self.grinding_range_var.get()
+            self.grinding_saved_balance = round(self.highest_cash - acceptable_range, 2)
+
+        self.tries += 1
+        self.picks = 0
+
+        reached_top_step = (
+            step_idx is not None and
+            max_step_idx is not None and
+            step_idx >= max_step_idx
+        )
+        if (
+            grinding_enabled and
+            not self.grinding_active and
+            reached_top_step and
+            round(self.bet, 2) == round(GRINDING_STEP["b"], 2) and
+            self.grinding_saved_balance is not None
+        ):
+            self.grinding_active = True
+            self.log_message(
+                f"[GRIND] Activated after last-step loss: repeating b={GRINDING_STEP['b']:.1f}, "
+                f"p={self.max_picks_var.get()}, d={GRINDING_STEP['d']} until balance >= "
+                f"{self.format_money(self.grinding_saved_balance)}"
+            )
+
+        if self.grinding_active:
+            self.bet = round(GRINDING_STEP["b"], 2)
+        else:
+            self.bet = self._get_target_bet_for_try(self.tries, round_config["selected_mode_name"])
+
+        if self.bet > self.highest_bet:
+            self.highest_bet = round(self.bet, 2)
+
+        self.log_message(f"[LOSS] Bet updated to: {self.format_money(self.bet)} (try #{self.tries})")
+
+    def _finish_test_mode(self, stop_reason):
+        """Close test mode without marking it as a forced stop."""
+        self.game_running = False
+        self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
+        self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
+        self.root.after(0, self.update_stats_display)
+
+        max_rounds = self.max_rounds_var.get()
+        progress = 100 if max_rounds <= 0 else min(100, (self.rounds / max_rounds) * 100)
+        self.root.after(0, lambda value=progress: self.progress_var.set(value))
+        self.root.after(0, lambda: self.progress_label.config(text=f"TEST MODE ended: {stop_reason}"))
+
+        self.log_message("\n=== TEST MODE RESULTS ===")
+        self.log_message(f"🛑 Stop reason: {stop_reason}")
+        self.log_message(f"💰 Final cash: {self.format_money(self.current_cash)}")
+        self.log_message(f"📈 Highest cash: {self.format_money(self.highest_cash)}")
+        self.log_message(f"📉 Lowest cash: {self.format_money(self.lowest_cash)}")
+        self.log_message(f"🔝 Highest bet: {self.format_money(self.highest_bet)}")
+        self.log_message(f"📉 Total loss: {self.format_money(self.loss)}")
+        self.log_message(f"🏁 Rounds played: {self.rounds}")
+
+        profit_loss = round(self.current_cash - self.starting_cash_var.get(), 2)
+        if profit_loss > 0:
+            self.log_message(f"✅ Net profit: +{self.format_money(profit_loss)}")
+        else:
+            self.log_message(f"❌ Net loss: {self.format_money(profit_loss)}")
+
+        self.log_message("🧪 Strategy simulation completed.")
 
     def _on_mode_var_changed(self, *_):
         """React to mode changes regardless of where they originate."""
@@ -1549,6 +1754,9 @@ class GrattaEVinciGUI:
         self.loss_label = ttk.Label(stats_grid, text="0.00", font=("Courier", 10))
         self.loss_label.grid(row=3, column=1, sticky=tk.W, padx=10, pady=2)
         
+        ttk.Label(stats_grid, text="📉 Lowest Cash:").grid(row=4, column=0, sticky=tk.W, pady=2)
+        self.lowest_cash_label = ttk.Label(stats_grid, text="0.00", font=("Courier", 10))
+        self.lowest_cash_label.grid(row=4, column=1, sticky=tk.W, padx=10, pady=2)
 
         # Progress bar
         progress_frame = ttk.LabelFrame(parent, text="Progress", padding=10)
@@ -1915,15 +2123,7 @@ class GrattaEVinciGUI:
             await asyncio.sleep(self.sleep_decrease_bet_force_var.get())
             pyautogui.click(lower_x, lower_y)
         
-        # Get selected mode and use its first value as minimum bet
-        selected_mode_name = self.mode_var.get()
-        if selected_mode_name == "custom" and self.custom_mode:
-            min_bet = self.custom_mode[0]["b"]
-        elif selected_mode_name in self.betting_modes:
-            min_bet = self.betting_modes[selected_mode_name][0]
-        else:
-            min_bet = 0.1
-
+        min_bet = self._get_min_bet_for_selected_mode()
         self.bet = round(min_bet, 2)
         self.log_message(f"🔽 Bet forced to minimum: {self.format_money(self.bet)}")
 
@@ -2097,146 +2297,138 @@ class GrattaEVinciGUI:
         if self.game_running:
             self.log_message("⚠️ Game already running! Stop current game first.")
             return
-            
-        self.log_message("🧪 Starting TEST MODE (simulation only - no mouse control)...")
-        self.log_message("📊 This will simulate 5 rounds to test your betting strategy")
-        
-        # Set game_running to True for test mode
+
+        if not self.validate_settings():
+            return
+
         self.game_running = True
-        
-        # Initialize variables for test
-        self.current_cash = round(self.starting_cash_var.get(), 2)
-        self.highest_cash = self.current_cash
-        
-        # Get selected mode and use its first value as initial bet (same as playM.py)
-        selected_mode_name = self.mode_var.get()
-        if selected_mode_name in self.betting_modes:
-            initial_bet = self.betting_modes[selected_mode_name][0]
-        else:
-            initial_bet = 0.1  # Fallback to 0.1 if mode not found
-        
-        self.bet = round(initial_bet, 2)
-        self.highest_bet = round(initial_bet, 2)
-        self.picks = 0
-        self.tries = 0
-        self.rounds = 0
-        self.loss = 0.0
-        self.total_win = 0.0  # Add this line
-        self.grinding_active = False
-        self.grinding_saved_balance = None
+        self.escape_pressed = False
+
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+
+        self.initialize_game_variables()
+        initial_config = self._get_round_config_for_strategy()
+
+        difficulty_text = initial_config["round_difficulty"]
+        picks_text = str(initial_config["max_picks"])
+        if self.mode_var.get() == "custom" and self.custom_mode:
+            difficulty_text = f"{difficulty_text} (step-based)"
+            picks_text = f"{picks_text} (step-based)"
+
+        self.log_message("🧪 Starting TEST MODE — simulating real 5x5 grid")
+        self.log_message(
+            f"📊 Mode: {self.mode_var.get()} | Difficulty: {difficulty_text} | "
+            f"Picks: {picks_text} | Starting cash: {self.format_money(self.current_cash)}"
+        )
+        self.log_message(
+            f"🧨 Board: {TEST_MODE_BOARD_SIZE} tiles | "
+            f"{initial_config['mine_count']} mines | {TEST_MODE_BOARD_SIZE - initial_config['mine_count']} coins"
+        )
+        if self.grinding_mode_var.get():
+            self.log_message(
+                f"⚙️ Grinding mode enabled | range={self.grinding_range_var.get():.2f} | "
+                f"random_p={'on' if self.grinding_p_random_var.get() else 'off'}"
+            )
+
+        self.progress_var.set(0)
+        self.progress_label.config(text="TEST MODE running...")
         self.update_stats_display()
         
         threading.Thread(target=self.run_test_mode, daemon=True).start()
     
     def run_test_mode(self):
         """Run game simulation for testing"""
+        stop_reason = "Simulation completed"
         try:
-            test_multiplier = self.get_win_multiplier(self.difficulty_var.get(), self.max_picks_var.get())
+            max_rounds = self.max_rounds_var.get()
+            target_win = self.target_win_var.get()
+            max_loss = self.max_loss_var.get()
 
-            # Simulate some game rounds
-            for round_num in range(1, 6):
+            while True:
                 if not self.game_running:
+                    stop_reason = "Stopped by user"
                     break
-                
-                self.log_message(f"\n=== Test Round {round_num} ===")
-                self.log_message(f"💰 Starting bet: {self.format_money(self.bet)}")
-                
-                # Simulate random outcome
-                if random.random() < 0.6:  # 60% win chance
-                    self.log_message("🎉 Test WIN!")
-                    win_amount = self.bet * test_multiplier
-                    self.current_cash += win_amount
-                    self.current_cash = round(self.current_cash, 2)
-                    self.total_win += win_amount  # Add this line
-                    self.log_message(f"💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)}")
-                    
-                    # Reset betting strategy after win
-                    self.tries = 0
-                    
-                    # Get selected mode and use its first value as minimum bet (same as playM.py logic)
-                    selected_mode_name = self.mode_var.get()
-                    if selected_mode_name in self.betting_modes:
-                        min_bet = self.betting_modes[selected_mode_name][0]
-                    else:
-                        min_bet = 0.1  # Fallback to 0.1 if mode not found
-                    
-                    # Reset bet to minimum after win (same as playM.py logic)
-                    while self.bet > min_bet:
-                        # Simulate decrease_bet logic without actual clicking
-                        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
-                        self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)
-                    self.log_message(f"🎯 WIN! Bet reset to minimum: {self.format_money(self.bet)}")
+
+                round_config = self._get_round_config_for_strategy()
+
+                if self.rounds >= max_rounds:
+                    stop_reason = "Reached maximum rounds"
+                    break
+                if self.current_cash >= target_win:
+                    stop_reason = "Reached target win"
+                    break
+                if self.loss >= max_loss:
+                    stop_reason = "Reached maximum loss"
+                    break
+                if self.current_cash < round_config["target_bet"]:
+                    stop_reason = "Insufficient cash"
+                    break
+
+                self.bet = round(round_config["target_bet"], 2)
+                self.picks = 0
+                self.randoms = []
+                if self.bet > self.highest_bet:
+                    self.highest_bet = round(self.bet, 2)
+
+                self.log_message(f"\n=== Test Round {self.rounds + 1} ===")
+                self.log_message(
+                    f"[ROUND] Strategy={round_config['strategy_source']} | "
+                    f"Mode={round_config['selected_mode_name']} | Difficulty={round_config['round_difficulty']} | "
+                    f"Picks target={round_config['max_picks']} | Mines={round_config['mine_count']} | "
+                    f"Bet={self.format_money(self.bet)}"
+                )
+
+                self.current_cash = round(self.current_cash - self.bet, 2)
+                self.log_message(f"[ROUND] Started round - Cash deducted: {self.format_money(self.bet)}")
+                self.log_message(f"💸 New Balance: {self.format_money(self.current_cash)}")
+
+                board_result = self._simulate_test_board(
+                    round_config["round_difficulty"],
+                    round_config["max_picks"],
+                )
+                opened_summary = ", ".join(
+                    f"T{entry['tile']}={'BLUE' if entry['outcome'] == 'coin' else 'RED'}"
+                    for entry in board_result["opened_tiles"]
+                )
+                self.log_message(f"[BOARD] Opened tiles: {opened_summary}")
+
+                self.picks = board_result["coins_found"]
+                if board_result["hit_mine"]:
+                    self.log_message(
+                        f"[LOSS] Hit a RED tile after {board_result['coins_found']} blue(s). "
+                        f"Balance remains {self.format_money(self.current_cash)}"
+                    )
+                    self._apply_test_loss(round_config)
                 else:
-                    self.log_message("💸 Test LOSS!")
-                    self.current_cash -= self.bet
-                    self.current_cash = round(self.current_cash, 2)
-                    self.tries += 1
-                    
-                    self.log_message(f"💸 Lost {self.format_money(self.bet)}! New balance: {self.format_money(self.current_cash)}")
-                    
-                    # Get betting strategy from selected mode (same logic as real game mode)
-                    selected_mode_name = self.mode_var.get()
-                    if selected_mode_name in self.betting_modes:
-                        mode_array = self.betting_modes[selected_mode_name]
-                        # Use tries as index, but cap at array length - 1
-                        bet_index = min(self.tries, len(mode_array) - 1)
-                        target_bet = mode_array[bet_index]
-                        old_bet = self.bet
-                        
-                        # Simulate stepping through bet increases (same as real game mode)
-                        while self.bet < target_bet:
-                            # Simulate increase_bet logic without actual clicking
-                            current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
-                            self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)
-                        
-                        self.log_message(f"📈 Bet updated from {selected_mode_name} mode: {self.format_money(old_bet)} → {self.format_money(self.bet)} (try #{self.tries})")
-                        
-                        # Update highest bet tracking (same as real game mode)
-                        if self.bet > self.highest_bet:
-                            self.highest_bet = round(self.bet, 2)
-                    else:
-                        # Fallback to simple increase if mode not found
-                        old_bet = self.bet
-                        self.bet = min(self.bet * 1.5, 5.0)  # Increase bet
-                        self.log_message(f"📈 Bet increased: {self.format_money(old_bet)} → {self.format_money(self.bet)}")
-                        
-                        # Update highest bet tracking for fallback case too
-                        if self.bet > self.highest_bet:
-                            self.highest_bet = round(self.bet, 2)
-                
-                # Update highest values
+                    self.log_message(
+                        f"[WIN] {round_config['max_picks']} BLUE tiles found. "
+                        f"Multiplier={round_config['multiplier']:.2f}"
+                    )
+                    self._apply_test_win(round_config)
+
+                self.rounds += 1
                 if self.current_cash > self.highest_cash:
-                    self.highest_cash = self.current_cash
-                # Note: highest_bet already updated above in the betting logic
-                
-                # Calculate loss
+                    self.highest_cash = round(self.current_cash, 2)
                 self.loss = max(0, round(self.highest_cash - self.current_cash, 2))
-                
-                # Update rounds counter
-                self.rounds = round_num
-                
-                # Update UI
+
+                progress = 100 if max_rounds <= 0 else min(100, (self.rounds / max_rounds) * 100)
+                self.root.after(0, lambda value=progress: self.progress_var.set(value))
+                self.root.after(
+                    0,
+                    lambda rounds=self.rounds, total=max_rounds: self.progress_label.config(
+                        text=f"Test round {rounds}/{total}"
+                    )
+                )
                 self.root.after(0, self.update_stats_display)
-                
-                # Log current state
-            self.log_message("\n=== TEST MODE RESULTS ===")
-            self.log_message(f"💰 Final cash: {self.format_money(self.current_cash)}")
-            self.log_message(f"📈 Highest cash: {self.format_money(self.highest_cash)}")
-            self.log_message(f"🔝 Highest bet: {self.format_money(self.highest_bet)}")
-            self.log_message(f"📉 Total loss: {self.format_money(self.loss)}")
-            self.log_message(f"🏁 Rounds played: {self.rounds}")
-            
-            profit_loss = self.current_cash - self.starting_cash_var.get()
-            if profit_loss > 0:
-                self.log_message(f"✅ Net profit: +{self.format_money(profit_loss)}")
-            else:
-                self.log_message(f"❌ Net loss: {self.format_money(profit_loss)}")
-            
-            self.log_message("🧪 Test mode completed!")
-            
+
+            if stop_reason == "Simulation completed":
+                stop_reason = "Strategy loop completed"
+        except Exception as e:
+            stop_reason = f"Error: {e}"
+            self.log_message(f"❌ TEST MODE error: {e}")
         finally:
-            # Always reset game_running when test is done
-            self.game_running = False
+            self._finish_test_mode(stop_reason)
     
     def validate_settings(self):
         """Validate game settings"""
@@ -2259,14 +2451,9 @@ class GrattaEVinciGUI:
         """Initialize game variables from GUI settings"""
         self.current_cash = round(self.starting_cash_var.get(), 2)
         self.highest_cash = self.current_cash
+        self.lowest_cash = self.current_cash
         
-        # Get selected mode and use its first value as initial bet (same as playM.py)
-        selected_mode_name = self.mode_var.get()
-        if selected_mode_name in self.betting_modes:
-            initial_bet = self.betting_modes[selected_mode_name][0]
-        else:
-            initial_bet = 0.1  # Fallback to 0.1 if mode not found
-        
+        initial_bet = self._get_min_bet_for_selected_mode()
         self.bet = round(initial_bet, 2)
         self.highest_bet = round(initial_bet, 2)
         self.picks = 0
@@ -2280,6 +2467,7 @@ class GrattaEVinciGUI:
         self.current_difficulty = None  # Resettato: difficoltà ignota fino alla prima impostazione
 
         self.log_message(f"💰 Initialized with cash: {self.format_money(self.current_cash)}")
+        self.log_message(f"🎯 Target win: {self.format_money(self.target_win_var.get())}")
         self.update_stats_display()
     
     def update_tiles_from_gui(self):
@@ -2373,15 +2561,17 @@ class GrattaEVinciGUI:
     
     async def play_real_game_round(self):
         """Play an actual game round with mouse automation"""
-        selected_mode_name = self.mode_var.get()
-        step_idx = None
-        max_step_idx = None
-        grinding_enabled = bool(self.grinding_mode_var.get())
+        round_config = self._get_round_config_for_strategy()
+        selected_mode_name = round_config["selected_mode_name"]
+        step_idx = round_config["step_idx"]
+        max_step_idx = round_config["max_step_idx"]
+        grinding_enabled = round_config["grinding_enabled"]
+        max_picks = round_config["max_picks"]
+        round_difficulty = round_config["round_difficulty"]
+        multiplier = round_config["multiplier"]
 
         # Determine picks and difficulty for this round
         if self.grinding_active:
-            max_picks = self.get_grinding_picks()
-            round_difficulty = GRINDING_STEP["d"]
             await self.set_difficulty(round_difficulty)
             await self.set_bet_value(GRINDING_STEP["b"])
             if self.bet > self.highest_bet:
@@ -2392,20 +2582,7 @@ class GrattaEVinciGUI:
                     f"fino a saldo >= {self.format_money(self.grinding_saved_balance)}"
                 )
         elif selected_mode_name == "custom" and self.custom_mode:
-            step_idx = min(self.tries, len(self.custom_mode) - 1)
-            max_step_idx = len(self.custom_mode) - 1
-            step_data = self.custom_mode[step_idx]
-            max_picks = step_data["p"]
-            round_difficulty = step_data["d"]
             await self.set_difficulty(round_difficulty)
-        else:
-            max_picks = self.max_picks_var.get()
-            round_difficulty = self.difficulty_var.get()
-            if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
-                step_idx = min(self.tries, len(self.betting_modes[selected_mode_name]) - 1)
-                max_step_idx = len(self.betting_modes[selected_mode_name]) - 1
-
-        multiplier = self.get_win_multiplier(round_difficulty, max_picks)
 
         # Start new round - reset picks and prepare for new game
         self.picks = 0
@@ -2495,13 +2672,7 @@ class GrattaEVinciGUI:
                                 self.tries = 0
                                 self.picks = 0
 
-                                if selected_mode_name == "custom" and self.custom_mode:
-                                    min_bet = self.custom_mode[0]["b"]
-                                elif selected_mode_name in self.betting_modes:
-                                    min_bet = self.betting_modes[selected_mode_name][0]
-                                else:
-                                    min_bet = 0.1
-
+                                min_bet = self._get_min_bet_for_selected_mode()
                                 await self.set_bet_value(min_bet)
                                 self.log_message(
                                     f"[GRIND] Completato: saldo recuperato ({self.format_money(self.current_cash)} >= "
@@ -2519,13 +2690,7 @@ class GrattaEVinciGUI:
                             self.tries = 0
                             self.picks = 0
 
-                            if selected_mode_name == "custom" and self.custom_mode:
-                                min_bet = self.custom_mode[0]["b"]
-                            elif selected_mode_name in self.betting_modes:
-                                min_bet = self.betting_modes[selected_mode_name][0]
-                            else:
-                                min_bet = 0.1
-
+                            min_bet = self._get_min_bet_for_selected_mode()
                             await self.set_bet_value(min_bet)
                             self.log_message(f"[WIN] Bet reset to minimum: {self.format_money(self.bet)}")
 
@@ -2581,13 +2746,10 @@ class GrattaEVinciGUI:
                         await self.set_difficulty(GRINDING_STEP["d"])
                         await self.set_bet_value(GRINDING_STEP["b"])
                     elif selected_mode_name == "custom" and self.custom_mode:
-                        next_idx = min(self.tries, len(self.custom_mode) - 1)
-                        target_bet = self.custom_mode[next_idx]["b"]
+                        target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
                         await self.set_bet_value(target_bet)
                     elif selected_mode_name in self.betting_modes:
-                        mode_array = self.betting_modes[selected_mode_name]
-                        bet_index = min(self.tries, len(mode_array) - 1)
-                        target_bet = mode_array[bet_index]
+                        target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
                         await self.set_bet_value(target_bet)
 
                     if self.bet > self.highest_bet:
@@ -2630,12 +2792,7 @@ class GrattaEVinciGUI:
             self.current_cash += self.bet * sim_multiplier
             self.tries = 0
             
-            # Get selected mode and use its first value as minimum bet (same as playM.py logic)
-            selected_mode_name = self.mode_var.get()
-            if selected_mode_name in self.betting_modes:
-                min_bet = self.betting_modes[selected_mode_name][0]
-            else:
-                min_bet = 0.1  # Fallback to 0.1 if mode not found
+            min_bet = self._get_min_bet_for_selected_mode()
             
             # Reset bet to minimum after win (same as playM.py logic)
             while self.bet > min_bet:
@@ -2651,10 +2808,7 @@ class GrattaEVinciGUI:
             # Get betting strategy from selected mode (same logic as real game mode)
             selected_mode_name = self.mode_var.get()
             if selected_mode_name in self.betting_modes:
-                mode_array = self.betting_modes[selected_mode_name]
-                # Use tries as index, but cap at array length - 1
-                bet_index = min(self.tries, len(mode_array) - 1)
-                target_bet = mode_array[bet_index]
+                target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
                 old_bet = self.bet
                 
                 # Simulate stepping through bet increases (same as real game mode)
@@ -2693,8 +2847,10 @@ class GrattaEVinciGUI:
     
     def update_stats_display(self):
         """Update the statistics display"""
+        self.lowest_cash = round(min(self.lowest_cash, self.current_cash), 2)
         self.current_cash_label.config(text=self.format_money(self.current_cash))
         self.highest_cash_label.config(text=self.format_money(self.highest_cash))
+        self.lowest_cash_label.config(text=self.format_money(self.lowest_cash))
         self.current_bet_label.config(text=self.format_money(self.bet))
         self.highest_bet_label.config(text=self.format_money(self.highest_bet))
         self.rounds_label.config(text=str(self.rounds))

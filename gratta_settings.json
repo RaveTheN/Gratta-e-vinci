@@ -1,24 +1,24 @@
 {
-  "starting_cash": 2017.52,
-  "target_win": 2020.5,
-  "max_loss": 400.0,
-  "max_rounds": 1000,
+  "starting_cash": 2000.0,
+  "target_win": 2040.0,
+  "max_loss": 20.0,
+  "max_rounds": 1500,
   "max_picks": 3,
   "mode": "custom",
   "wait_selected": false,
   "grinding_mode": true,
   "grinding_range": 0.5,
   "grinding_p_random": true,
-  "play_x": 3192,
-  "play_y": 1677,
-  "raise_x": 2952,
-  "raise_y": 1816,
-  "lower_x": 2530,
-  "lower_y": 1806,
-  "raise_diff_x": 2911,
-  "raise_diff_y": 1672,
-  "lower_diff_x": 2546,
-  "lower_diff_y": 1667,
+  "play_x": 3246,
+  "play_y": 1617,
+  "raise_x": 2914,
+  "raise_y": 1800,
+  "lower_x": 2533,
+  "lower_y": 1814,
+  "raise_diff_x": 2903,
+  "raise_diff_y": 1660,
+  "lower_diff_x": 2535,
+  "lower_diff_y": 1662,
   "difficulty": "low",
   "custom_mode": [
     {
@@ -84,104 +84,104 @@
   ],
   "tiles": {
     "1": [
-      2609,
-      683
+      2606,
+      679
     ],
     "2": [
-      2795,
-      683
+      2801,
+      679
     ],
     "3": [
-      3006,
-      683
+      2999,
+      679
     ],
     "4": [
-      3190,
-      683
+      3189,
+      679
     ],
     "5": [
-      3391,
-      683
+      3388,
+      679
     ],
     "6": [
-      2609,
+      2606,
       816
     ],
     "11": [
-      2609,
-      963
+      2606,
+      957
     ],
     "16": [
-      2609,
-      1109
+      2606,
+      1101
     ],
     "21": [
-      2609,
-      1254
+      2606,
+      1252
     ],
     "7": [
-      2795,
+      2801,
       816
     ],
     "8": [
-      3006,
+      2999,
       816
     ],
     "9": [
-      3190,
+      3189,
       816
     ],
     "10": [
-      3391,
+      3388,
       816
     ],
     "12": [
-      2795,
-      963
+      2801,
+      957
     ],
     "13": [
-      3006,
-      963
+      2999,
+      957
     ],
     "14": [
-      3190,
-      963
+      3189,
+      957
     ],
     "15": [
-      3391,
-      963
+      3388,
+      957
     ],
     "17": [
-      2795,
-      1109
+      2801,
+      1101
     ],
     "18": [
-      3006,
-      1109
+      2999,
+      1101
     ],
     "19": [
-      3190,
-      1109
+      3189,
+      1101
     ],
     "20": [
-      3391,
-      1109
+      3388,
+      1101
     ],
     "22": [
-      2795,
-      1254
+      2801,
+      1252
     ],
     "23": [
-      3006,
-      1254
+      2999,
+      1252
     ],
     "24": [
-      3190,
-      1254
+      3189,
+      1252
     ],
     "25": [
-      3391,
-      1254
+      3388,
+      1252
     ]
   },
   "betting_modes": {
@@ -242,9 +242,9 @@
     }
   ],
   "sleep_play_or_collect": 1.0,
-  "sleep_increase_bet": 0.5,
-  "sleep_decrease_bet": 0.5,
-  "sleep_decrease_bet_force": 0.05,
+  "sleep_increase_bet": 0.7,
+  "sleep_decrease_bet": 0.7,
+  "sleep_decrease_bet_force": 0.2,
   "sleep_decrease_diff_force": 0.05,
   "sleep_set_difficulty": 0.5,
   "sleep_click_tile": 1.0,
