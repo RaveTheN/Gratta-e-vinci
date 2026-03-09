@@ -1,7 +1,7 @@
 {
-  "starting_cash": 2000.0,
-  "target_win": 2040.0,
-  "max_loss": 20.0,
+  "starting_cash": 285.0,
+  "target_win": 300.0,
+  "max_loss": 100.0,
   "max_rounds": 1500,
   "max_picks": 3,
   "mode": "custom",
@@ -47,12 +47,12 @@
       "d": "medium"
     },
     {
-      "b": 0.9,
+      "b": 1.0,
       "p": 3,
       "d": "medium"
     },
     {
-      "b": 1.5,
+      "b": 1.8,
       "p": 3,
       "d": "medium"
     },
@@ -68,6 +68,11 @@
     },
     {
       "b": 9.0,
+      "p": 3,
+      "d": "medium"
+    },
+    {
+      "b": 12.0,
       "p": 3,
       "d": "medium"
     },
