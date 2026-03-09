@@ -12,24 +12,19 @@ import time
 from pynput import keyboard, mouse
 import json
 import os
-
-WIN_MULTIPLIERS = {
-    "low": {1: 1.1, 2: 1.3, 3: 1.5, 4: 1.7},
-    "medium": {1: 1.3, 2: 1.8, 3: 2.4, 4: 3.6},
-    "high": {1: 1.6, 2: 2.7, 3: 4.8, 4: 8.7},
-}
-
-GRINDING_STEP = {"b": 20.0, "d": "high"}
-TEST_MODE_BOARD_SIZE = 25
-TEST_MODE_MINE_CONFIG = {"low": 3, "medium": 6, "high": 10}
-
-class Point:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-    
-    def __repr__(self):
-        return f"Point({self.x}, {self.y})"
+from game_config import (
+    Point,
+    BETTING_MODES,
+    WIN_MULTIPLIERS,
+    BET_VALUES,
+    TARGET_BLUE,
+    TARGET_RED,
+    COLOR_TOLERANCE,
+    GRINDING_STEP,
+    TEST_MODE_BOARD_SIZE,
+    TEST_MODE_MINE_CONFIG,
+    format_money,
+)
 
 
 class CoordinateRecorder:
@@ -380,28 +375,23 @@ class GrattaEVinciGUI:
         self.current_difficulty = None  # Traccia la difficoltà attualmente impostata in gioco
         self.init_steps = [{"action": "set_bet_min"}]
         
-        # Target colors
-        self.target_blue = {"r": 1, "g": 108, "b": 238}
-        self.target_red = {"r": 200, "g": 13, "b": 1}
+        # Target colors (from game_config)
+        self.target_blue = dict(TARGET_BLUE)
+        self.target_red = dict(TARGET_RED)
         
         # Tiles dictionary (will be configurable)
         self.tiles = {}
         
-        # Betting modes - initialize with default values
-        self.betting_modes = {
-            "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-            "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 16.0, 20.0],
-            "high": [0.2, 0.3, 0.6, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0],
-            "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0]
-        }
+        # Betting modes - deep copy from shared constants
+        self.betting_modes = {k: list(v) for k, v in BETTING_MODES.items()}
 
         # Custom betting mode: each step has bet (b), picks (p), difficulty (d)
         self.custom_mode = [
             {"b": 0.1, "p": 2, "d": "low"},
         ]
 
-        # Valid bet values that can be used in betting modes
-        self.bet_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.5, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 25.0]
+        # Valid bet values (from game_config)
+        self.bet_values = list(BET_VALUES)
 
         # Pause configurabili
         self.sleep_play_or_collect_var = tk.DoubleVar(value=1.0)
@@ -1332,24 +1322,7 @@ class GrattaEVinciGUI:
     def reset_betting_modes(self):
         """Reset betting modes to defaults"""
         if messagebox.askyesno("Reset Betting Modes", "Reset all betting modes to default values?"):
-            # Ensure default modes only use values from bet_values
-            default_modes = {
-                "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-                "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 16.0, 20.0],
-                "high": [0.2, 0.3, 0.6, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0],
-                "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0]
-            }
-            
-            # Validate that all default values are in bet_values
-            for mode_name, values in default_modes.items():
-                invalid_values = [v for v in values if v not in self.bet_values]
-                if invalid_values:
-                    messagebox.showerror("Default Mode Error", 
-                                       f"Default mode '{mode_name}' contains invalid values: {invalid_values}\n"
-                                       f"Please update the default modes to use only valid bet values.")
-                    return
-            
-            self.betting_modes = default_modes
+            self.betting_modes = {k: list(v) for k, v in BETTING_MODES.items()}
             self.update_betting_preview()
             messagebox.showinfo("Reset Complete", "Betting modes reset to defaults!")
     
@@ -1999,13 +1972,8 @@ class GrattaEVinciGUI:
         def reset_to_defaults():
             """Reset all modes to default values"""
             if messagebox.askyesno("Reset", "Reset all betting modes to default values?"):
-                default_modes = {
-                    "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-                    "medium": [0.1, 0.2, 0.3, 0.5, 0.9, 1.5, 3.0, 5.0, 9.0, 16.0, 20.0],
-                    "high": [0.2, 0.3, 0.6, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0],
-                    "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 16.0, 20.0]
-                }
-                
+                default_modes = {k: list(v) for k, v in BETTING_MODES.items()}
+
                 # Update text widgets
                 for mode_name, values in default_modes.items():
                     if mode_name in mode_text_widgets:
@@ -2824,7 +2792,7 @@ class GrattaEVinciGUI:
                     self.highest_bet = round(self.bet, 2)
             else:
                 # Fallback to simple increase if mode not found
-                bet_multipliers = [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0]
+                bet_multipliers = list(BETTING_MODES.get("normal", [0.1]))
                 if self.tries < len(bet_multipliers):
                     target_bet = bet_multipliers[self.tries]
                     old_bet = self.bet
@@ -2859,8 +2827,8 @@ class GrattaEVinciGUI:
         self.total_win_label.config(text=self.format_money(self.total_win))  # Add this line
     
     def format_money(self, value):
-        """Format monetary values to always show exactly 2 decimal places"""
-        return f"{round(value, 2):.2f}"
+        """Thin wrapper around game_config.format_money for instance method calls."""
+        return format_money(value)
     
     def log_message(self, message):
         """Add a message to the status log"""
