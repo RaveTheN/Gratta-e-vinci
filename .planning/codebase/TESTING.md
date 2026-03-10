@@ -1,373 +1,236 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-03-09
+**Analysis Date:** 2026-03-10
 
 ## Test Framework
 
 **Runner:**
-- No test framework configured (no pytest, unittest discovery, etc.)
-- Manual test scripts using `if __name__ == "__main__"` entry points
+- No test framework installed or configured
+- No `pytest`, `unittest`, `nose`, or any test runner in `requirements.txt`
+- No test configuration files (`pytest.ini`, `conftest.py`, `tox.ini`, `pyproject.toml`)
+- `.gitignore` excludes `*.test.js`, `*.test.ts`, `*.spec.js`, `*.spec.ts` but these are irrelevant (project is Python)
 
 **Assertion Library:**
-- No formal assertion library
-- Manual validation using `if` statements and print feedback
-- User confirmation prompts in interactive tests
+- None configured
 
 **Run Commands:**
 ```bash
-python test_playM_safe.py          # Safe simulation without real mouse clicks
-python test_coordinates.py         # Interactive position tester
-python test_setup.py               # Verify dependencies and basic functionality
-python mouseMonitoring.py          # Live mouse position tracking
+# No test commands available
+# Recommend adding pytest:
+pip install pytest
+pytest
 ```
 
 ## Test File Organization
 
 **Location:**
-- Co-located with main scripts in project root
-- Test files in same directory as code they test: `/c/Progetti/Gratta e vinci/`
+- No test files exist in the project
+- No `tests/` directory
+- No co-located test files alongside source
 
-**Naming:**
-- Prefix pattern: `test_*.py`
-- Examples: `test_playM_safe.py`, `test_playM_safe_fixed.py`, `test_coordinates.py`, `test_setup.py`
-
-**Structure:**
+**Recommended Structure:**
 ```
-/c/Progetti/Gratta e vinci/
-├── gratta_e_vinci_gui.py          # Main app (no tests in file)
-├── playM.py                        # Game engine (no tests in file)
-├── test_playM_safe.py              # Safe simulation tests
-├── test_playM_safe_fixed.py        # Fixed simulation tests
-├── test_coordinates.py             # Interactive coordinate validation
-├── test_setup.py                   # Dependency verification
-└── mouseMonitoring.py              # Mouse position utility
+tests/
+  test_game_config.py      # Constants and Point class
+  test_color_detector.py    # Color detection logic
+  test_coordinate_manager.py # Grid calculation
+  test_settings_manager.py  # Settings load/save/validate
+  test_game_engine.py       # Game logic (testable via mocked adapter)
 ```
 
-## Test Structure
+## Built-in Test Mode (Not Automated Tests)
 
-**Suite Organization:**
+The project has a **manual test mode** (simulation) built into the game engine, which is not an automated test suite but rather a simulation feature for the user.
 
-Test files use procedural scripts rather than test suites. Each test file has single entry point:
+**Location:** `game_engine.py` lines 430-634, `gratta_e_vinci_gui.py` lines 1921-2062
 
+**What it does:**
+- Simulates a 5x5 board with mines and coins
+- Runs the full betting strategy loop without mouse automation
+- Uses `_simulate_test_board()` to generate random board outcomes
+- Reports final statistics (profit/loss, rounds played, highest bet)
+
+**Entry point:** "TEST MODE" button in Game Control tab, calls `GameEngine.run_test_mode()`
+
+**Key simulation methods:**
 ```python
-if __name__ == "__main__":
-    # Test execution
-    asyncio.run(test_main_game_logic())
+# game_engine.py
+def _simulate_test_board(self, round_difficulty, max_picks):
+    """Simulates a 5x5 board with mines based on difficulty."""
+    mine_count = TEST_MODE_MINE_CONFIG[round_difficulty]
+    board = ["mine"] * mine_count + ["coin"] * (TEST_MODE_BOARD_SIZE - mine_count)
+    random.shuffle(board)
+    # ... opens tiles sequentially until hit_mine or max_picks reached
+
+def _apply_test_win(self, round_config, verbose=True):
+    """Apply winning round outcome to game state."""
+
+def _apply_test_loss(self, round_config, verbose=True):
+    """Apply losing round outcome to game state."""
 ```
 
-**Patterns:**
-- Setup: Initialize global variables at module level (lines 46-63 in `test_playM_safe.py`)
-- Execution: Async function calls or interactive prompts
-- Teardown: Print final results, cleanup resources
-- No setUp/tearDown methods; state managed globally
+## Testability Assessment
 
-**Example from `test_playM_safe.py` (lines 135-280):**
-```python
-async def test_main_game_logic():
-    """Test the main game logic without actual automation"""
-    global current_cash, highest_cash, bet, highest_bet, picks, tries, rounds, loss, escape_pressed
+**Easily testable modules (pure logic, no GUI dependency):**
 
-    # Start keyboard listener for escape key detection
-    keyboard_listener = start_keyboard_listener()
+1. **`game_config.py`** - Constants and `Point` class, trivially testable
+   - `format_money()` function
+   - `Point` class
+   - Constant value verification
 
-    print("🎮 === SAFE TEST MODE - NO ACTUAL MOUSE ACTIONS ===")
-    print(f"🚀 Starting with cash: {format_money(current_cash)}")
+2. **`settings_manager.py`** - JSON load/save with validation
+   - `SettingsManager.validate()` returns error list -- ideal for unit tests
+   - `SettingsManager.merge_with_defaults()` pure function
+   - `SettingsManager.load_settings()` / `save_settings()` need filesystem (use `tmp_path`)
 
-    # Main game loop
-    while True:
-        # Check for escape key press
-        if escape_pressed:
-            print("🛑 Test stopped by escape key")
-            break
+3. **`color_detector.py`** - Color matching logic
+   - `ColorDetector.is_color_in_range_blue()` / `is_color_in_range_red()` are pure functions
+   - `ColorDetector.read_color_at_point()` requires screen capture (mock `ImageGrab`)
 
-        # [Main test logic: pick tiles, check colors, update cash]
+4. **`coordinate_manager.py`** - Grid calculation
+   - `CoordinateManager.populate_tile_vars()` needs Tkinter `IntVar` (can be mocked or created headless)
+   - `CoordinateManager.build_tile_points()` returns dict of `Point` objects
+   - `CoordinateRecorder` is heavily GUI-coupled
 
-    # Cleanup keyboard listener
-    keyboard_listener.stop()
+**Harder to test (GUI-coupled):**
 
-    print("\n🏆 === TEST COMPLETED ===")
-    # [Print final statistics]
-```
+5. **`game_engine.py`** - Core game logic
+   - `GameEngine` depends on `self.app` (the GUI instance) for all state
+   - `TkAutomationAdapter` wraps `pyautogui` calls -- must be mocked
+   - Test mode methods (`run_test_mode`, `_simulate_test_board`, `_apply_test_win`, `_apply_test_loss`) contain testable logic but access `self.app.*` extensively
+
+6. **`gratta_e_vinci_gui.py`** - 2963 lines, deeply coupled to Tkinter
+   - Contains duplicated legacy methods alongside refactored versions
+   - Not unit-testable in current form without significant mocking
 
 ## Mocking
 
-**Framework:** Manual mock implementations via simulation functions
-
-**Patterns:**
-
-Simulated clicks without actual automation:
-```python
-# From test_playM_safe.py (lines 73-75)
-async def simulate_click(point, action_name):
-    await asyncio.sleep(0.1)  # Simulate delay
-    print(f"[SIMULATED] {action_name} at {point}")
-```
-
-Simulated color detection with configurable outcomes:
-```python
-# From test_playM_safe.py (lines 77-88)
-async def simulate_color_check():
-    """Simulate color detection - 19 blue tiles, 6 red tiles out of 25"""
-    await asyncio.sleep(0.1)
-    rand = random.random()
-    if rand < 0.76:  # 76% chance blue (19/25)
-        return "blue"
-    elif rand < 0.95:  # 19% chance red (6/25 ≈ 24%)
-        return "red"
-    else:
-        return "unknown"  # 5% chance unknown (test retry mechanism)
-```
+**Framework:** Not established. Recommend `unittest.mock` (stdlib) or `pytest-mock`.
 
 **What to Mock:**
-- Mouse clicks: use `simulate_click()` instead of `pyautogui.click()`
-- Color detection: use `simulate_color_check()` instead of reading actual pixels
-- Time delays: use `await asyncio.sleep()` for realistic timing simulation
-- Keyboard input: use pynput Listener for actual ESC key detection (not mocked)
+- `pyautogui.click()`, `pyautogui.position()`, `pyautogui.size()` - Mouse automation
+- `PIL.ImageGrab.grab()` - Screenshot capture
+- `pynput.keyboard.Listener`, `pynput.mouse.Listener` - Input listeners
+- `tkinter` variables and widgets when testing `GameEngine` methods
+- File I/O for `SettingsManager` tests (or use `tmp_path` fixture)
+
+**Recommended mocking pattern for GameEngine:**
+```python
+# Create a mock app object that mimics GrattaEVinciGUI attributes
+class MockApp:
+    def __init__(self):
+        self.bet = 0.1
+        self.current_cash = 2000.0
+        self.highest_cash = 2000.0
+        self.tries = 0
+        self.picks = 0
+        self.rounds = 0
+        self.loss = 0.0
+        self.total_win = 0.0
+        self.randoms = []
+        self.grinding_active = False
+        self.grinding_saved_balance = None
+        self.highest_bet = 0.1
+        self.custom_mode = [{"b": 0.1, "p": 2, "d": "low"}]
+        self.betting_modes = {"normal": [0.1, 0.2, 0.3]}
+        # ... mock tk.StringVar, tk.IntVar, etc.
+
+    def log_message(self, msg):
+        pass  # or collect for assertions
+
+    def format_money(self, value):
+        return f"{round(value, 2):.2f}"
+```
 
 **What NOT to Mock:**
-- Game state variables (cash, bets, picks): Use real variables to test logic
-- Betting sequence logic: Test against actual betting mode arrays
-- Keyboard listener: Real pynput listener to test ESC key functionality
-- Event handlers: Real handler implementations (just call them in tests)
+- `game_config.py` constants -- use real values
+- `SettingsManager` internal logic -- test directly
+- `ColorDetector` color-matching math -- test directly
+- `random` module -- seed it for deterministic tests: `random.seed(42)`
 
 ## Fixtures and Factories
 
 **Test Data:**
+- Settings defaults are defined in `settings_manager.py` `_build_defaults()` -- use as test fixture base
+- Betting modes defined in `game_config.py` `BETTING_MODES` -- use directly
+- Color targets: `TARGET_BLUE = {"r": 1, "g": 108, "b": 238}`, `TARGET_RED = {"r": 200, "g": 13, "b": 1}`
 
-Initial state fixture in `test_playM_safe.py` (lines 46-70):
-```python
-# Simulate game variables
-starting_cash = 50
-current_cash = 50
-highest_cash = 50
-bet = 0.1
-highest_bet = 0.1
-picks = 0
-tries = 0
-rounds = 0
-randoms = []
-loss = 0
-max_loss = 10
-max_rounds = 10
-max_picks = 3
-target_win = 100
-
-modes = {
-    "normal": [0.1, 0.2, 0.3, 0.5, 0.8, 1.4, 2.5, 4.5, 8.0, 14.0, 20.0],
-    "safe": [0.1, 0.1, 0.2, 0.3, 0.5, 1.0, 1.8, 3.0, 5.0, 9.0, 15.0, 20.0]
-}
-selected_mode = modes["safe"]
-multiplier = 2.4
-```
-
-Helper functions for test data generation:
-- `test_generate_random_tile()`: Generate unique random tile numbers without replacement
-- `test_empty_randoms()`: Reset tile selection state
-- `test_log_state()`: Print current game state snapshot
-
-**Location:**
-- Fixtures defined at module level in test files
-- Global variables initialized before main test execution
-- No separate fixtures directory
+**Recommended fixture location:**
+- `tests/conftest.py` for shared pytest fixtures
 
 ## Coverage
 
-**Requirements:** No coverage enforcement detected
+**Requirements:** None enforced. No coverage tool configured.
 
-**View Coverage:**
-- Not configured
-- Manual testing via print statements and visual validation
-- Test completion indicated by final statistics output
-
-**Coverage Gaps:**
-- No automated coverage measurement
-- Ad-hoc testing of game logic
-- Missing: Unit tests for individual functions
-- Missing: Integration tests for full game flow with real coordinates
+**Recommended setup:**
+```bash
+pip install pytest pytest-cov
+pytest --cov=. --cov-report=html
+```
 
 ## Test Types
 
 **Unit Tests:**
-- Minimal (ad-hoc functions in `test_playM_safe.py`)
-- Scope: Individual game operations (increase/decrease cash, betting logic)
-- Approach: Simulate operation, print result, verify via console output
-- Examples: `test_increase_cash()`, `test_get_bet_from_mode_array()`, `test_log_state()`
+- Priority targets: `settings_manager.py`, `color_detector.py`, `game_config.py`, `coordinate_manager.py`
+- These modules have clean interfaces and minimal external dependencies
 
 **Integration Tests:**
-- Main focus: `test_main_game_logic()` in `test_playM_safe.py`
-- Scope: Full game loop with simulated tiles, colors, and betting
-- Approach: Run complete game simulation with mocked mouse/color operations
-- Tests: Round flow, cash management, win/loss conditions, ESC key handling
+- Test `GameEngine` with mocked `TkAutomationAdapter` and mock app object
+- Test settings round-trip: save then load and verify values match
+- Test coordinate grid: set key coordinates, verify all 25 tiles calculated correctly
 
 **E2E Tests:**
-- Not used
-- Real game automation only runs in production mode via GUI
+- Not practical for this project (requires real browser game running)
+- The built-in TEST MODE serves as a manual E2E simulation
 
-## Common Patterns
+## Recommended Test Priority
 
-**Async Testing:**
+1. **`settings_manager.py`** - Highest value: validate() covers many edge cases, load/save are critical for user data
+2. **`color_detector.py`** - Color matching is core game logic, easy to test
+3. **`game_config.py`** - Quick wins: verify constants, format_money()
+4. **`coordinate_manager.py`** - Grid math is deterministic and testable
+5. **`game_engine.py`** - Most complex; start with `_simulate_test_board`, `_get_target_bet_for_try`, `_get_round_config_for_strategy`
 
-Test uses `asyncio.run()` to execute async game loop in synchronous test environment:
+## Example Test Patterns
+
+**Testing SettingsManager validation:**
 ```python
-# From test_playM_safe.py (lines 275-287)
-if __name__ == "__main__":
-    print("🧪 Running safe test of game logic...")
-    print("   Press ESCAPE key or Ctrl+C to stop the test.")
-    try:
-        asyncio.run(test_main_game_logic())
-        print("✅ Test completed successfully!")
-    except KeyboardInterrupt:
-        print("\n⚠️ Test stopped by user (Ctrl+C)")
-    except Exception as e:
-        print(f"❌ Test failed with error: {e}")
-        import traceback
-        traceback.print_exc()
+def test_validate_rejects_invalid_mode():
+    sm = SettingsManager()
+    payload = sm.merge_with_defaults({"mode": "invalid"})
+    errors = sm.validate(payload)
+    assert any("mode" in e for e in errors)
+
+def test_validate_accepts_valid_settings():
+    sm = SettingsManager()
+    payload = sm.merge_with_defaults(None)  # all defaults
+    errors = sm.validate(payload)
+    assert errors == []
 ```
 
-Async helper functions for simulating delays:
+**Testing ColorDetector:**
 ```python
-# From test_playM_safe.py (lines 73-75)
-async def simulate_click(point, action_name):
-    await asyncio.sleep(0.1)  # Simulate delay
-    print(f"[SIMULATED] {action_name} at {point}")
+def test_is_blue_within_tolerance():
+    cd = ColorDetector(tolerance=50)
+    color = {"r": 10, "g": 100, "b": 230}
+    assert cd.is_color_in_range_blue(color) is True
 
-async def simulate_color_check():
-    await asyncio.sleep(0.1)
-    # Return simulated color
+def test_is_red_outside_tolerance():
+    cd = ColorDetector(tolerance=10)
+    color = {"r": 100, "g": 100, "b": 100}
+    assert cd.is_color_in_range_red(color) is False
 ```
 
-**Error Testing:**
-
-Retry mechanism for uncertain color detection:
+**Testing format_money:**
 ```python
-# From test_playM_safe.py (lines 190-256)
-color_detected = False
-retry_count = 0
-max_retries = 3
+from game_config import format_money
 
-while not color_detected and retry_count < max_retries:
-    color_result = await simulate_color_check()
-
-    if color_result == "blue":
-        # Handle blue tile
-        color_detected = True
-    elif color_result == "red":
-        # Handle red tile
-        color_detected = True
-    else:
-        # Unknown color - retry
-        retry_count += 1
-        print(f"❓ Unknown color for tile {tile_num} (attempt {retry_count}/{max_retries})")
-
-        if retry_count < max_retries:
-            print("   Waiting 1 second and retrying color detection...")
-            await asyncio.sleep(1)
-        else:
-            print("   Max retries reached, skipping this tile...")
-            color_detected = True
-```
-
-Stop condition testing via keyboard listener:
-```python
-# From test_playM_safe.py (lines 39-44)
-def on_key_press(key):
-    global escape_pressed
-    if key == keyboard.Key.esc:
-        print("\n🛑 ESCAPE key pressed - stopping test...")
-        escape_pressed = True
-        return False  # Stop the listener
-```
-
-**Coordinate Testing:**
-
-Interactive tool in `test_coordinates.py` (lines 44-109) for validating click positions:
-```python
-def interactive_position_tester():
-    """Interactive tool to test positions"""
-    print("🎯 Interactive Position Tester")
-    print("Commands:")
-    print("  'pos' - Get current mouse position")
-    print("  'click X Y' - Test click at coordinates")
-    print("  'color X Y' - Get color at coordinates")
-    print("  'screenshot X Y' - Take screenshot with crosshair")
-    print("  'live' - Live mouse position tracking")
-
-    while True:
-        try:
-            command = input("\n> ").strip().lower()
-
-            if command == 'quit':
-                break
-            elif command == 'pos':
-                x, y = get_mouse_position()
-                print(f"Current mouse position: ({x}, {y})")
-            # [More commands...]
-```
-
-**Dependency Testing:**
-
-Module import verification in `test_setup.py`:
-```python
-# From test_setup.py (lines 16-44)
-def test_imports():
-    """Test if all required modules can be imported"""
-    required_modules = [
-        'asyncio', 'pyautogui', 'pytesseract', 'cv2', 'numpy', 'PIL', 'time', 'random', 'math'
-    ]
-
-    print("=== Testing Module Imports ===")
-    failed_imports = []
-
-    for module in required_modules:
-        try:
-            importlib.import_module(module)
-            print(f"✅ {module} - OK")
-        except ImportError as e:
-            print(f"❌ {module} - FAILED: {e}")
-            failed_imports.append(module)
-
-    if failed_imports:
-        print(f"\n⚠️  Missing modules: {failed_imports}")
-        return False
-    else:
-        print("\n✅ All modules imported successfully!")
-        return True
-```
-
-## Test Output & Feedback
-
-**Console Output:**
-- Emoji-prefixed messages for visual distinction (✅, ❌, 🎯, 💰, 📈)
-- Real-time progress updates during game simulation
-- Final summary with statistics (final cash, highest bet, rounds completed, losses)
-- Color detection retries shown with attempt count
-
-**Example output from `test_playM_safe.py`:**
-```
-🎮 === SAFE TEST MODE - NO ACTUAL MOUSE ACTIONS ===
-🚀 Starting with cash: 50.00
-
-=== Round 1 ===
-[SIMULATED] PLAY - START ROUND at Point(1581, 849)
-🎰 Started round with bet: 0.10 - Cash deducted immediately
-🎲 Generated tile: 12
-[SIMULATED] TILE 12 at Point(1512, 800)
-🔵 Tile 12 is BLUE!
-🎯 Got 1 blue(s), need 2 more...
-
-...
-
-🏆 === TEST COMPLETED ===
-Final Results:
-💰 Final Cash: 45.80
-📈 Highest Cash: 50.00
-🔝 Highest Bet: 0.20
-🏁 Rounds Completed: 10
-📉 Total Loss: 4.20
-🎯 Final Picks: 0
-🔄 Final Tries: 3
+def test_format_money_two_decimals():
+    assert format_money(1.1) == "1.10"
+    assert format_money(0.1 + 0.2) == "0.30"
+    assert format_money(100) == "100.00"
 ```
 
 ---
 
-*Testing analysis: 2026-03-09*
+*Testing analysis: 2026-03-10*

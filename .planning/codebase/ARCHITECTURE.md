@@ -1,179 +1,174 @@
 # Architecture
 
-**Analysis Date:** 2026-03-09
+**Analysis Date:** 2026-03-10
 
 ## Pattern Overview
 
-**Overall:** Event-driven GUI application with asynchronous game automation engine
+**Overall:** Monolithic GUI application with partial extraction toward a layered architecture (ongoing refactor)
 
 **Key Characteristics:**
-- Desktop GUI built with Tkinter managing UI state and user interaction
-- Separate async game loop running in daemon thread for automation
-- Mouse control via pyautogui with color detection for game state evaluation
-- Settings persistence via JSON configuration file
-- Threading model: GUI thread (main) + daemon async game thread + daemon mouse monitoring thread
+- Single Tkinter GUI class (`GrattaEVinciGUI`, ~2963 lines) acts as both presentation and application controller
+- Game engine (`GameEngine`) extracted as a separate class but tightly coupled to the GUI via `self.app` back-reference
+- Adapter pattern (`TkAutomationAdapter`) bridges engine I/O actions to physical mouse/screen automation
+- Shared constants module (`game_config`) provides domain types and configuration values
+- Settings persistence via a dedicated `SettingsManager` class
+- Coordinate grid logic extracted to `CoordinateManager` / `CoordinateRecorder`
 
 ## Layers
 
-**Presentation Layer:**
-- Purpose: User interface and user input management
-- Location: `gratta_e_vinci_gui.py` (class `GrattaEVinciGUI`, lines 353-3201)
-- Contains: 7 Tkinter tabs (Settings, Coordinates, Betting Modes, Initialization, Game Control, Statistics, Pause), dialogs, and real-time displays
-- Depends on: Game engine methods, settings persistence, logging system
-- Used by: Direct user interaction (clicks, combobox selection, text entry)
+**Presentation (GUI):**
+- Purpose: Tkinter window with 7 tabbed panes; renders settings, coordinates, betting modes, init steps, game control, statistics, and pause configuration
+- Location: `gratta_e_vinci_gui.py` (class `GrattaEVinciGUI`)
+- Contains: All widget creation (`create_*_tab` methods), user event handlers, modal editor windows
+- Depends on: `game_engine`, `color_detector`, `coordinate_manager`, `settings_manager`, `game_config`
+- Used by: Entry point at bottom of `gratta_e_vinci_gui.py`
 
-**Game Engine Layer:**
-- Purpose: Core automation logic and game state management
-- Location: `gratta_e_vinci_gui.py` (methods: `main_game_loop`, `play_real_game_round`, game control methods)
-- Contains: Game loop, round execution, betting strategy application, difficulty management, state tracking
-- Depends on: Mouse control layer, color detection, configuration
-- Used by: Presentation layer's start/stop buttons and test mode
+**Game Engine:**
+- Purpose: Owns the runtime game loop, strategy/state transitions, test mode simulation, and initialization step execution
+- Location: `game_engine.py` (class `GameEngine`)
+- Contains: `main_game_loop`, `play_real_game_round`, `run_test_mode`, bet/difficulty management, win/loss application
+- Depends on: `game_config` (constants), `TkAutomationAdapter` (I/O), GUI app instance for state (via `self.app`)
+- Used by: `GrattaEVinciGUI.start_game()`, `GrattaEVinciGUI.start_test_mode()`
 
-**Mouse Control & Input Layer:**
-- Purpose: Automated mouse clicks, keyboard monitoring, screenshot capture
-- Location: `gratta_e_vinci_gui.py` (methods: `click_tile`, `play_or_collect`, `set_bet_value`, `set_difficulty`, `read_color_at_point`)
-- Contains: pyautogui wrappers, pynput keyboard listener, pixel color reading
-- Depends on: Coordinate mappings, tile/button positions
-- Used by: Game engine for all interactions with the game
+**Automation Adapter:**
+- Purpose: Translates high-level game actions (click tile, increase bet, read color) into physical pyautogui calls and screen reads
+- Location: `game_engine.py` (class `TkAutomationAdapter`)
+- Contains: `play_or_collect`, `increase_bet`, `decrease_bet`, `click_tile`, `read_color`, `set_difficulty`
+- Depends on: `pyautogui`, `ColorDetector`, GUI app instance for coordinate/sleep variables
+- Used by: `GameEngine`
 
-**Configuration & Persistence Layer:**
-- Purpose: Load/save game settings and coordinates
-- Location: `gratta_settings.json` (persistent) and `gratta_e_vinci_gui.py` (in-memory state)
-- Contains: Game parameters, tile coordinates, betting modes, sleep timings, custom betting strategies
-- Depends on: File system
-- Used by: Presentation and game engine for initialization and settings management
+**Color Detection:**
+- Purpose: Screenshot a single pixel and classify it as blue (win), red (loss), or unknown
+- Location: `color_detector.py` (class `ColorDetector`)
+- Contains: `read_color_at_point`, `is_color_in_range_blue`, `is_color_in_range_red`
+- Depends on: `pyautogui`, `PIL.ImageGrab`, `game_config` (default color constants)
+- Used by: `TkAutomationAdapter`
 
-**Coordinate Recording Layer:**
-- Purpose: Interactive UI for mapping game button and tile positions
-- Location: `gratta_e_vinci_gui.py` (class `CoordinateRecorder`, lines 35-351)
-- Contains: Mouse listener for clicks, overlay window, step-based recording UI
-- Depends on: pynput mouse events, Tkinter window management
-- Used by: User during initial setup via "Coordinates" tab
+**Coordinate Management:**
+- Purpose: Smart grid calculation (5x5 tile positions from 9 input points) and interactive recording overlay
+- Location: `coordinate_manager.py` (classes `CoordinateManager`, `CoordinateRecorder`)
+- Contains: `populate_tile_vars`, `build_tile_points`, `build_preview_text`, full recording workflow with keyboard/mouse listeners
+- Depends on: `tkinter`, `pynput`, `game_config.Point`
+- Used by: `GrattaEVinciGUI`
+
+**Settings Persistence:**
+- Purpose: Load/save/validate JSON settings with defaults and schema checks
+- Location: `settings_manager.py` (class `SettingsManager`)
+- Contains: `load_settings`, `save_settings`, `validate`, `merge_with_defaults`, `save_custom_mode`
+- Depends on: `game_config.BETTING_MODES`
+- Used by: `GrattaEVinciGUI`
+
+**Shared Configuration:**
+- Purpose: Domain types (`Point`), constants (betting modes, colors, multipliers), and utility functions
+- Location: `game_config.py`
+- Contains: `Point` class, `BETTING_MODES`, `WIN_MULTIPLIERS`, `BET_VALUES`, `TARGET_BLUE`, `TARGET_RED`, `COLOR_TOLERANCE`, `GRINDING_STEP`, `TEST_MODE_*`, `format_money`
+- Depends on: Nothing (leaf module)
+- Used by: All other modules
 
 ## Data Flow
 
-**Game Initialization:**
+**Real Game Round:**
 
-1. User clicks "Start Game" button → `start_game()` validates settings
-2. `initialize_game_variables()` sets cash, bet, rounds to initial state
-3. `update_tiles_from_gui()` loads tile coordinates from GUI entries (or JSON)
-4. `execute_init_steps()` runs pre-game configuration (set min bet, adjust difficulty)
-5. `main_game_loop()` async function starts
+1. User clicks "START GAME" in Game Control tab -> `GrattaEVinciGUI.start_game()`
+2. GUI validates settings via `GameEngine.validate_settings()`, shows confirmation dialog
+3. Sets `game_running=True`, `running_event`, initializes game variables
+4. Spawns daemon thread running `GameEngine.run_game_async()` which creates a new asyncio event loop
+5. Engine executes init steps (configurable sequence: force min bet, set difficulty, etc.)
+6. Main loop: check stop conditions -> `play_real_game_round()`
+7. Round: resolve strategy config -> set difficulty/bet via adapter -> click play -> pick random tiles
+8. For each tile: `TkAutomationAdapter.click_tile()` -> sleep -> `read_color()` -> classify blue/red/unknown
+9. Blue: increment picks, check if won. Red: apply loss, escalate bet per Martingale. Unknown: retry with sleep
+10. Win: collect winnings, reset bet to minimum. Loss: increment tries, set next bet in sequence
+11. GUI stats updated via `root.after(0, ...)` thread-safe callbacks
 
-**Single Round Flow:**
+**Test Mode (Simulation):**
 
-1. `play_real_game_round()` called within `main_game_loop()`
-2. `_get_round_config_for_strategy()` determines: bet amount, max picks, difficulty (based on mode)
-3. If custom mode: adjust difficulty via `set_difficulty()`
-4. `play_or_collect()` clicks Play button → cash deducted immediately
-5. Loop: `generate_random_tile()` → `click_tile()` → `read_color_at_point()` → color classification
-6. Per tile: if BLUE, increment `picks`; if RED, end round (LOSS); if unknown, retry with `sleep_color_retry`
-7. Win condition: `picks >= max_picks` → `play_or_collect()` (Collect) → add winnings to cash
-8. Loss condition: RED tile detected → calculate loss, apply Martingale adjustment
-9. Next round or stop based on exit conditions (max rounds, target win, max loss, insufficient cash)
+1. User clicks "TEST MODE" -> `GrattaEVinciGUI.start_test_mode()`
+2. Same init as real mode but spawns `GameEngine.run_test_mode()` in daemon thread
+3. Each round: `_simulate_test_board()` creates randomized 5x5 grid with mines/coins
+4. Board result determines win/loss; applies via `_apply_test_win()` / `_apply_test_loss()`
+5. No physical mouse clicks; runs at high speed with minimal delays
+6. Verbosity: first 5 rounds detailed, then every 25th round summarized
+
+**Settings Load/Save:**
+
+1. On startup: `SettingsManager.load_settings("gratta_settings.json")` -> merge with defaults
+2. GUI populates all `tk.*Var` widgets from loaded payload
+3. On save: GUI collects all widget values into payload dict -> `SettingsManager.save_settings()`
 
 **State Management:**
-
-- Current cash, highest cash, bet amount, picks, rounds, loss tracking maintained in instance variables
-- After each win: bet resets to minimum (via `set_bet_value()`)
-- After each loss: bet advances one step in betting mode sequence
-- Grinding mode: activates when loss exceeds threshold; uses fixed high bet until balance recovers
+- Game state is stored as instance variables on `GrattaEVinciGUI`: `current_cash`, `highest_cash`, `bet`, `tries`, `rounds`, `loss`, `grinding_active`, etc.
+- `GameEngine` and `TkAutomationAdapter` access state via `self.app` back-reference
+- Thread synchronization: `threading.Event` objects (`stop_event`, `running_event`) plus `game_running` boolean
+- GUI updates from game thread use `root.after(0, callback)` for thread safety
+- `pynput.keyboard.Listener` runs in its own thread for ESC key detection
 
 ## Key Abstractions
 
-**Point Class:**
-- Purpose: Represent 2D coordinates for mouse clicks
-- Examples: `gratta_e_vinci_gui.py` line 26, `playM.py` line 13
-- Pattern: Simple data holder with `x`, `y` attributes and `__repr__` for logging
+**Point:**
+- Purpose: Represents a screen coordinate (x, y)
+- Examples: `game_config.py` line 6
+- Pattern: Simple value object with `.x` and `.y` attributes
 
-**Game Mode System:**
-- Purpose: Encapsulate different betting strategies
-- Examples in `gratta_settings.json` (lines 192-238): `normal`, `medium`, `high`, `safe`, `custom`
-- Pattern: Each mode is array of bet amounts (standard) or array of dicts with `b` (bet), `p` (picks), `d` (difficulty) (custom)
+**Betting Mode (Standard):**
+- Purpose: Array of escalating bet values indexed by loss count (`tries`)
+- Examples: `game_config.BETTING_MODES["normal"]` = `[0.1, 0.2, 0.3, ...]`
+- Pattern: Dictionary of string keys to float arrays
 
-**WIN_MULTIPLIERS Lookup Table:**
-- Purpose: Resolve payout based on difficulty and picks
-- Location: `gratta_e_vinci_gui.py` (lines 16-20)
-- Pattern: Nested dict `{difficulty: {picks: multiplier}}` keyed by game difficulty level and number of blue tiles picked
-- Examples: low difficulty + 2 picks = 1.1× bet; high difficulty + 4 picks = 8.7× bet
+**Betting Mode (Custom):**
+- Purpose: Array of step objects with bet, picks, and difficulty per step
+- Examples: `self.custom_mode = [{"b": 0.1, "p": 2, "d": "low"}, ...]`
+- Pattern: List of dicts, each step controls all round parameters
 
-**Round Configuration Object:**
-- Purpose: Encapsulate all strategy parameters for a single round
-- Location: Returned by `_get_round_config_for_strategy()` (around line 2430)
-- Contents: selected_mode_name, step_idx, max_step_idx, round_difficulty, max_picks, multiplier, grinding_enabled
-- Used by: `play_real_game_round()` to determine how to execute a round
+**Round Config:**
+- Purpose: Resolved configuration for current round (picks, difficulty, bet, multiplier)
+- Examples: returned by `GameEngine._get_round_config_for_strategy()`
+- Pattern: Dict with keys: `selected_mode_name`, `strategy_source`, `max_picks`, `round_difficulty`, `target_bet`, `multiplier`, etc.
 
-**Color Detection Abstraction:**
-- Purpose: Map RGB pixel values to game state (blue tile, red tile, unknown)
-- Methods: `read_color_at_point()`, `is_color_in_range_blue()`, `is_color_in_range_red()`
-- Tolerance: ±50 per RGB channel from target colors
-- Target colors defined in `__init__`: `target_blue` (1, 108, 238), `target_red` (200, 13, 1)
+**Init Steps:**
+- Purpose: User-defined sequence of actions to run before the game loop starts
+- Examples: `[{"action": "set_bet_min"}, {"action": "raise_difficulty", "times": 2}]`
+- Pattern: List of dicts with `action` key and action-specific parameters
 
 ## Entry Points
 
-**Main GUI Application:**
-- Location: `gratta_e_vinci_gui.py` (entire file, instantiated at module end)
-- Triggers: User double-clicks or runs `python gratta_e_vinci_gui.py`
-- Responsibilities: Create Tkinter window, load settings, start mouse monitoring, display 7 tabs
+**Main Application:**
+- Location: `gratta_e_vinci_gui.py` (bottom of file, `if __name__ == "__main__"` block)
+- Triggers: `run_gui.bat` or direct `python gratta_e_vinci_gui.py`
+- Responsibilities: Creates Tk root, instantiates `GrattaEVinciGUI`, runs main loop
 
-**Game Start Button:**
-- Location: `start_game()` method, called when user clicks "Start Game" button
-- Triggers: User interaction on Game Control tab
-- Responsibilities: Validate settings, confirm with user, spawn async game thread, start keyboard listener
+**Mouse Monitoring Utility:**
+- Location: `mouseMonitoring.py`
+- Triggers: Direct execution `python mouseMonitoring.py`
+- Responsibilities: Prints mouse coordinates to stdout in real-time (standalone utility)
 
-**Test Mode Button:**
-- Location: `start_test_mode()` method
-- Triggers: User interaction on Game Control tab
-- Responsibilities: Simulate game without mouse control, useful for debugging betting logic
-
-**Coordinate Recording:**
-- Location: `CoordinateRecorder.start()` method, triggered by "Start Recording" in Coordinates tab
-- Triggers: User clicks button to begin coordinate mapping
-- Responsibilities: Show overlay, listen for mouse clicks, capture positions of game elements
-
-**Standalone Automation (Legacy):**
-- Location: `playM.py` (module-level execution)
-- Triggers: `python playM.py` (no GUI, uses hardcoded coordinates)
-- Responsibilities: Automation engine without UI (used for testing or headless operation)
+**Setup Script:**
+- Location: `setup.bat`
+- Triggers: First-time setup
+- Responsibilities: Creates `.venv`, installs dependencies from `requirements.txt`
 
 ## Error Handling
 
-**Strategy:** Try-catch blocks with user feedback via messagebox and log messages
+**Strategy:** Mostly try/except at boundary points; no centralized error handling
 
 **Patterns:**
-
-- **Settings Validation:** `validate_settings()` checks required fields, displays error dialog if missing (e.g., missing tile coordinates)
-- **Color Detection Retry:** If color is unknown (not blue or red), retry up to 3 times with `sleep_color_retry` delay before treating as failure
-- **Keyboard Listener Safety:** Wrapped in try-catch; if setup fails, shows error dialog and cancels recording
-- **Async Error Recovery:** Game loop checks `self.escape_pressed` at critical points; graceful exit on keyboard interrupt
-- **Mouse Failsafe:** `pyautogui.FAILSAFE = True` triggers abort if mouse moved to top-left corner
+- `GameEngine.validate_settings()` raises `ValueError` on invalid config, caught by GUI to show messagebox
+- `ColorDetector.read_color_at_point()` raises `ValueError` for out-of-bounds coordinates; caught in `TkAutomationAdapter.read_color()` returning black pixel
+- Color detection retry loop: unknown colors trigger infinite retry with configurable sleep, no timeout
+- Test mode wraps entire loop in try/except/finally to ensure `_finish_test_mode()` runs
+- `pyautogui.FAILSAFE` (move to top-left corner) as emergency stop mechanism
+- `pynput` keyboard listener catches ESC key to trigger graceful shutdown
 
 ## Cross-Cutting Concerns
 
-**Logging:**
-- Central method `log_message(message)` appends to scrolled text widget in Statistics tab
-- Includes emoji prefixes for readability: 🎰 start, 💸 loss, 💰 win, 🛑 stop, ⚠️ warning
+**Logging:** Custom `log_message()` method on `GrattaEVinciGUI` that appends timestamped text to a `ScrolledText` widget. No file logging. All game engine logging goes through `self.app.log_message()`.
 
-**Validation:**
-- Field-level: Tkinter variables use IntVar/DoubleVar/StringVar with setter callbacks
-- Settings-level: `validate_settings()` checks tiles dict is not empty, coordinates are numeric
-- Betting-level: Validates bet doesn't exceed player cash, bet values in allowed list
+**Validation:** `SettingsManager.validate()` checks mode, difficulty, picks, color_tolerance, custom_mode schema. `GameEngine.validate_settings()` checks starting_cash and max_picks. No runtime validation of coordinate values.
 
-**Authentication:**
-- None (local desktop application)
+**Threading:** Three concurrent threads during gameplay: (1) main Tkinter UI thread, (2) daemon game loop thread with its own asyncio event loop, (3) pynput keyboard listener thread. Mouse monitoring runs as a separate daemon thread at all times.
 
-**Async Coordination:**
-- Main game loop runs in daemon thread spawned by `start_game()`
-- Mouse monitoring runs in separate daemon thread with `start_mouse_monitoring()`
-- Keyboard listener runs in pynput's internal thread via `keyboard.Listener()`
-- All cross-thread updates to GUI use `self.root.after()` to marshal to main thread
-
-**Difficulty Management:**
-- Current difficulty tracked in `self.current_difficulty`
-- Standard modes: difficulty set once at game start via `set_difficulty()`
-- Custom modes: difficulty adjusted per round based on custom_mode steps
-- Grinding mode: difficulty adjusted while grinding is active
+**Localization:** Mixed English/Italian strings throughout. GUI labels and log messages use both languages inconsistently.
 
 ---
 
-*Architecture analysis: 2026-03-09*
+*Architecture analysis: 2026-03-10*

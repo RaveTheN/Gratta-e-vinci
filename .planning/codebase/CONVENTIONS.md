@@ -1,209 +1,195 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-03-09
+**Analysis Date:** 2026-03-10
 
 ## Naming Patterns
 
 **Files:**
-- Snake case for all Python files: `gratta_e_vinci_gui.py`, `playM.py`, `test_playM_safe.py`
-- Test files follow pattern: `test_*.py` (e.g., `test_setup.py`, `test_coordinates.py`)
+- Use `snake_case.py` for all Python modules: `game_config.py`, `color_detector.py`, `settings_manager.py`
+- Exception: `mouseMonitoring.py` uses camelCase (legacy, not actively maintained)
+- Main GUI file: `gratta_e_vinci_gui.py`
+- Settings file: `gratta_settings.json`
 
-**Functions:**
-- Snake case for all function/method names: `log_message()`, `read_color_at_point()`, `format_money()`
-- Private/internal methods prefixed with single underscore: `_on_click()`, `_create_overlay()`, `_build_steps()`
-- Async functions use `async def` with same snake_case naming: `async def increase_cash()`, `async def sleep()`
+**Classes:**
+- Use `PascalCase`: `GrattaEVinciGUI`, `GameEngine`, `TkAutomationAdapter`, `ColorDetector`, `CoordinateManager`, `CoordinateRecorder`, `SettingsManager`, `Point`
+- One primary class per module (except `game_engine.py` which has `GameEngine` + `TkAutomationAdapter`)
+
+**Functions/Methods:**
+- Use `snake_case` for all methods: `start_game()`, `validate_settings()`, `play_or_collect()`
+- Private methods prefixed with single underscore: `_is_running()`, `_get_min_bet_for_selected_mode()`, `_apply_test_win()`
+- Callback methods use `on_` prefix: `on_save_settings()`, `on_load_settings()`
+- Internal event handlers use `_on_` prefix: `_on_mode_var_changed()`, `_on_grinding_toggle()`, `_on_color_tolerance_changed()`
 
 **Variables:**
-- Snake case for local and instance variables: `current_cash`, `highest_bet`, `max_loss`, `target_win`
-- Constants in UPPER_CASE with underscores: `TEST_MODE_BOARD_SIZE`, `WIN_MULTIPLIERS`, `GRINDING_STEP`
-- Global variables follow lowercase pattern: `escape_pressed`, `selected_mode`, `tiles`
-- Dictionary keys in lowercase: `{"r": 0, "g": 0, "b": 0, "a": 255}` (RGB color format)
+- Tkinter variables use `_var` suffix: `starting_cash_var`, `mode_var`, `play_x_var`, `sleep_after_play_var`
+- Tkinter labels use `_label` suffix: `current_cash_label`, `progress_label`
+- Boolean flags use descriptive names: `game_running`, `escape_pressed`, `mouse_monitoring`, `grinding_active`
+- Sleep/pause variables follow `sleep_<action>_var` pattern: `sleep_play_or_collect_var`, `sleep_click_tile_var`
 
-**Types/Classes:**
-- Class names in PascalCase: `Point`, `CoordinateRecorder`, `GrattaEVinciGUI`
-- Constructor: `__init__()` following Python convention
-- String representation: `__repr__()` method implemented
+**Constants:**
+- Use `UPPER_SNAKE_CASE` in `game_config.py`: `BETTING_MODES`, `WIN_MULTIPLIERS`, `BET_VALUES`, `TARGET_BLUE`, `COLOR_TOLERANCE`, `GRINDING_STEP`
+
+**Tkinter Widget References:**
+- Buttons: `start_button`, `stop_button`
+- Frames: `control_frame`, `stats_grid`
+- Trees: `init_tree`
 
 ## Code Style
 
 **Formatting:**
-- No automated linter/formatter detected (no .pylintrc, .flake8, pyproject.toml)
-- Indentation: 4 spaces (Python standard)
-- Line length: varies, typically under 100 characters but some lines exceed this
-- Docstrings: Triple-quoted strings on single or multiple lines
+- No automated formatter detected (no `.prettierrc`, `pyproject.toml`, `setup.cfg`, or linting config)
+- 4-space indentation throughout
+- Line length varies; some lines exceed 120 characters (especially in `game_engine.py` condition checks)
+- Use double quotes for strings consistently in newer modules (`game_engine.py`, `settings_manager.py`, `color_detector.py`)
+- Mixed quote styles in `gratta_e_vinci_gui.py` (both single and double)
 
 **Linting:**
-- No configured linting tool
-- Code follows general PEP 8 style loosely
-- Mix of styles observed (some files more consistent than others)
+- No linting tool configured (no `.flake8`, `pylintrc`, `ruff.toml`, or equivalent)
+- Recommend adding `ruff` or `flake8` for consistency
+
+**Type Hints:**
+- Used in newer extracted modules: `color_detector.py`, `settings_manager.py`, `game_engine.py`
+- Pattern: `from __future__ import annotations` at top of newer modules
+- Not used in `gratta_e_vinci_gui.py` (legacy monolith) or `game_config.py`
+- Use `dict[str, int]` and `list[str]` (modern syntax with `__future__` annotations)
+- Use `| None` union syntax: `target_blue: dict[str, int] | None = None`
 
 ## Import Organization
 
 **Order:**
-1. Standard library imports (asyncio, json, os, random, time, threading)
-2. Third-party imports (tkinter, pyautogui, pynput, PIL, cv2, pytesseract)
-3. Local imports (Point class definitions, custom modules)
+1. Standard library: `import tkinter`, `import threading`, `import asyncio`, `import json`, `import os`, `import time`, `import random`
+2. Third-party: `import pyautogui`, `from pynput import keyboard, mouse`, `from PIL import ImageGrab`
+3. Local modules: `import color_detector`, `from game_config import ...`, `from game_engine import GameEngine`
+
+**Patterns:**
+- Mix of module imports (`import color_detector`) and named imports (`from game_config import Point, BETTING_MODES`)
+- In `gratta_e_vinci_gui.py`, both styles are used for the same module (e.g., `import color_detector` AND `from color_detector import ColorDetector`)
+- Lazy imports inside functions: `from tkinter import filedialog` and `import datetime` used inside method bodies for rarely-used features
 
 **Path Aliases:**
-- No aliases used in codebase
-- Relative imports from same modules: `from pynput import keyboard, mouse`
-- All imports at top of file
-
-**Example from `gratta_e_vinci_gui.py` (lines 5-14):**
-```python
-import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
-import threading
-import asyncio
-import pyautogui
-import random
-import time
-from pynput import keyboard, mouse
-import json
-import os
-```
+- None. All imports are direct module names (flat structure, no packages)
 
 ## Error Handling
 
 **Patterns:**
-- Try-except blocks wrap risky operations (screenshot capture, file I/O, color detection)
-- Generic exception catching with `Exception as e` (broad, not type-specific)
-- Error messages logged to UI via `self.log_message()` when available
-- Graceful degradation: functions return default values on error (e.g., return `{"r": 0, "g": 0, "b": 0, "a": 255}` on color read fail)
+- Broad `except Exception as e` used throughout for safety in GUI context
+- User-facing errors shown via `messagebox.showerror()`: `on_save_settings()`, `start_game()`
+- Non-critical errors logged via `self.log_message(f"[WARN] ...")` or `self.log_message(f"... Error: {e}")`
+- Settings validation returns a list of error strings: `SettingsManager.validate()` in `settings_manager.py`
+- Game engine validation raises `ValueError` for invalid settings: `GameEngine.validate_settings()` in `game_engine.py`
+- Color detection returns fallback value on error: `{"r": 0, "g": 0, "b": 0, "a": 255}` in `game_engine.py` line 85
 
-**Example from `gratta_e_vinci_gui.py` (lines 2202-2219):**
+**Error display convention:**
 ```python
-def read_color_at_point(self, point):
-    """Read color at a point on screen"""
-    try:
-        screenshot = pyautogui.screenshot()
-        pixel_color = screenshot.getpixel((point.x, point.y))
-        if len(pixel_color) == 3:  # RGB
-            r, g, b = pixel_color
-            a = 255
-        else:  # RGBA
-            r, g, b, a = pixel_color
-        return {"r": r, "g": g, "b": b, "a": a}
-    except Exception as e:
-        self.log_message(f"❌ Error reading color: {e}")
-        return {"r": 0, "g": 0, "b": 0, "a": 255}
+# Critical errors: messagebox
+messagebox.showerror("Invalid Settings", str(e))
+
+# Runtime errors: log with emoji prefix
+self.log_message(f"[WARN] Mouse monitor stopped due to error: {e}")
+self.log_message(f"... TEST MODE error: {e}")
 ```
 
 ## Logging
 
-**Framework:** Console print statements and custom `log_message()` method in GUI
+**Framework:** Custom `log_message()` method on `GrattaEVinciGUI` class (`gratta_e_vinci_gui.py` line 2495)
 
-**Patterns:**
-- `log_message()` method in `GrattaEVinciGUI` class adds timestamp and routes to UI text widget
-- Emoji prefixes for visual distinction: `🎰`, `❌`, `✅`, `🎯`, `💰`, `📈`
-- Timestamp format: `[HH:MM:SS] message` added by `log_message()` method (lines 2865-2870)
-- Simple `print()` statements in utility scripts and tests
-- Debug logging with emoji indicators for game events
-
-**Example from `gratta_e_vinci_gui.py` (lines 2865-2870):**
+**Pattern:**
 ```python
 def log_message(self, message):
-    """Add a message to the status log"""
     timestamp = time.strftime("%H:%M:%S")
     full_message = f"[{timestamp}] {message}\n"
     self.root.after(0, lambda: self.status_text.insert(tk.END, full_message))
     self.root.after(0, lambda: self.status_text.see(tk.END))
 ```
 
+**Log message conventions:**
+- Use emoji prefixes for visual categorization in log output
+- Game events: `[HIT]`, `[LOSS]`, `[WIN]`, `[ROUND]`, `[BOARD]`, `[COLOR]`, `[GRIND]`, `[STOP]`, `[SUMMARY]`
+- Warnings: `[WARN]`
+- No structured logging library; all output goes to Tkinter `ScrolledText` widget
+- Thread-safe via `self.root.after(0, ...)` to marshal to main thread
+
+**When to log:**
+- Every game action (tile click, color detection, bet change, round start/end)
+- Settings load/save results
+- Error conditions
+- State transitions (grinding activation, game start/stop)
+
 ## Comments
 
 **When to Comment:**
-- Function docstrings provided for public/complex methods
-- Sparse inline comments; mostly self-documenting code
-- Comments appear on complex logic (e.g., color tolerance checks, betting strategy)
-- TODO/FIXME comments minimal (not observed in scanned files)
+- Docstrings on all public methods in extracted modules (`game_engine.py`, `settings_manager.py`, `color_detector.py`)
+- Module-level docstrings present on all `.py` files
+- Inline comments for non-obvious logic (e.g., `# Click lower bet button multiple times to ensure minimum`)
+- Section comments with `# ---` separators in `game_config.py` for grouping constants
 
-**JSDoc/TSDoc:**
-- Not applicable (Python codebase)
-- Docstrings use triple quotes: `"""Description."""`
-- Single-line docstrings for simple functions
-- Multi-line docstrings for complex logic
-
-**Example from `playM.py` (lines 131-133):**
+**Docstring Style:**
 ```python
-def format_money(value):
-    """Format a number to always show exactly 2 decimal places"""
-    return f"{round(value, 2):.2f}"
+"""Short one-line description."""
+
+"""Multi-line docstring.
+Additional details on second line if needed.
+"""
 ```
+
+**Language:**
+- Code comments and docstrings: predominantly English
+- Some Italian strings in UI labels and log messages (mixed): `"Forza Bet al Minimo"`, `"Difficolt forzata al minimo"`, `"Nessuno step di inizializzazione configurato"`
+- Italian is used for user-facing GUI labels in the Initialization Steps tab and Pauses tab
 
 ## Function Design
 
-**Size:** Functions vary widely (5-200+ lines)
-- Small utility functions: 5-10 lines (e.g., `format_money()`, `get_random_number()`)
-- Complex logic functions: 50-100+ lines (e.g., `run_game_async()`, `run_test_mode()`)
-- Event handlers: 20-50 lines
+**Size:**
+- Methods in `gratta_e_vinci_gui.py` range from 2-line wrappers to 100+ line GUI builders
+- Game logic methods (`play_real_game_round`, `run_test_mode`) are 80-100+ lines
+- Extracted modules have shorter methods (5-30 lines typically)
 
 **Parameters:**
-- Mostly positional parameters
-- Default parameters used: `tolerance=50` in color detection methods
-- Instance variables accessed via `self` in class methods
-- Some functions accept optional `tries`, `selected_mode_name` parameters for flexibility
+- Use `self.app` reference pattern: extracted modules (`GameEngine`, `TkAutomationAdapter`) hold a reference to the GUI app
+- Dicts used for complex return values: `_get_round_config_for_strategy()` returns a dict with 8+ keys
+- Optional params with `None` defaults: `_get_target_bet_for_try(self, tries=None, selected_mode_name=None)`
 
 **Return Values:**
-- Boolean for validation: `validate_settings()`, `is_color_in_range_blue()`
-- Dictionary for color data: `{"r": r, "g": g, "b": b, "a": a}`
-- None for state-modifying operations (logging, incrementing counters)
-- Numbers/strings for utility functions: `format_money()` returns formatted string
-
-**Example from `gratta_e_vinci_gui.py` (lines 2221-2235):**
-```python
-def is_color_in_range_blue(self, color, target_color, tolerance=50):
-    """Check if color is in blue range"""
-    return (
-        abs(color["r"] - target_color["r"]) <= tolerance and
-        abs(color["g"] - target_color["g"]) <= tolerance and
-        abs(color["b"] - target_color["b"]) <= tolerance
-    )
-
-def is_color_in_range_red(self, color, target_color, tolerance=50):
-    """Check if color is in red range"""
-    return (
-        abs(color["r"] - target_color["r"]) <= tolerance and
-        abs(color["g"] - target_color["g"]) <= tolerance and
-        abs(color["b"] - target_color["b"]) <= tolerance
-    )
-```
+- Dicts for structured data: `{"r": 0, "g": 0, "b": 0, "a": 255}` for colors, `{"mine_count": ..., "hit_mine": ...}` for board simulation
+- `round(value, 2)` used consistently for monetary values to avoid floating-point issues
+- Boolean returns for validation: `validate_settings()` returns `True` or raises
 
 ## Module Design
 
 **Exports:**
-- No explicit `__all__` declarations observed
-- All public methods/classes accessible
-- Private methods use `_` prefix convention to signal internal use
+- Each module exports its primary class(es)
+- `game_config.py` exports constants and the `Point` class (no `__all__` defined)
+- No `__init__.py` files (flat module structure, not a package)
 
 **Barrel Files:**
-- Not used; no aggregating import files
+- Not used. Each module imported directly.
 
-**Structure Pattern:**
-- Single-responsibility: `playM.py` contains game logic; `gratta_e_vinci_gui.py` contains UI
-- Utility scripts are standalone: `mouseMonitoring.py`, `test_setup.py`, `test_coordinates.py`
+**Adapter Pattern:**
+- `TkAutomationAdapter` in `game_engine.py` wraps GUI-specific I/O (mouse clicks, color reading)
+- `GameEngine` delegates all physical actions through the adapter
+- This separation enables test mode (simulated board) vs real mode (actual mouse automation)
 
-## Async/Threading Patterns
+## Threading Conventions
 
-**Asyncio:**
-- Used in main game loop via `asyncio.run()` in separate daemon thread
-- Async functions for click simulation and delays: `async def sleep()`, `async def simulate_click()`
-- Mixed async/sync: some functions (like `log_state()`, `empty_randoms()`) are synchronous even in async context
+**Pattern:**
+- Game loop runs in a daemon thread: `threading.Thread(target=..., daemon=True).start()`
+- Asyncio event loop created per-thread: `loop = asyncio.new_event_loop()`
+- GUI updates marshaled via `self.root.after(0, callback)` from worker threads
+- Stop signaling via `threading.Event`: `stop_event`, `running_event`
+- Mouse monitoring runs in a separate daemon thread with `time.sleep(0.1)` polling
 
-**Threading:**
-- Main application spawns daemon threads for game loop and mouse monitoring
-- Pattern: `threading.Thread(target=method, daemon=True).start()` in `start_game()` (line 2270)
-- Event listeners (keyboard, mouse) run in separate threads via pynput
+**Thread Safety:**
+- All GUI updates go through `root.after(0, ...)` -- follow this pattern strictly
+- State flags (`game_running`, `escape_pressed`) accessed from multiple threads without locks
+- `pynput.keyboard.Listener` and `pynput.mouse.Listener` run in their own threads
 
-**Example from `gratta_e_vinci_gui.py` (lines 2269-2273):**
-```python
-# Start game in separate thread
-threading.Thread(target=self.run_game_async, daemon=True).start()
+## Money/Value Formatting
 
-# Start keyboard listener
-self.start_keyboard_listener()
-```
+**Pattern:**
+- Always use `round(value, 2)` when setting monetary values
+- Display via `format_money()` from `game_config.py`: `f"{round(value, 2):.2f}"`
+- Instance wrapper: `self.format_money(value)` delegates to module-level `format_money()`
 
 ---
 
-*Convention analysis: 2026-03-09*
+*Convention analysis: 2026-03-10*

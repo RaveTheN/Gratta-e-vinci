@@ -1,118 +1,102 @@
 # External Integrations
 
-**Analysis Date:** 2026-03-09
+**Analysis Date:** 2026-03-10
 
 ## APIs & External Services
 
-**Not Applicable**
-
-This project does not integrate with external APIs or remote services. All operations are local and self-contained.
+**None.** This application does not call any external APIs or web services. It is a desktop automation tool that interacts with a browser-based game purely through screen coordinates, mouse clicks, and pixel color reading.
 
 ## Data Storage
 
-**Local Filesystem Only:**
-- Settings file: `gratta_settings.json` (JSON format)
-  - Contains: Game configuration, coordinates, betting modes, timing parameters
-  - Auto-loaded on startup from `GrattaEVinciGUI._load_settings()` in `gratta_e_vinci_gui.py`
-  - Manually saved via "Save Settings" button
-  - Location: Project root directory
+**Databases:**
+- None - no database used
 
-**No Database:**
-- No SQL database integration
-- No ORM layer
-- No cloud database connections
+**File Storage:**
+- Local filesystem only
+  - `gratta_settings.json` - Settings persistence (read/write via `settings_manager.py`)
+  - JSON format, loaded on startup, saved manually by user
 
-**File Operations:**
-- Settings persistence: JSON read/write via Python's `json` module
-- Screenshots: Temporary in-memory via `pyautogui.screenshot()` using PIL
-- No file storage integrations
+**Caching:**
+- None
 
 ## Authentication & Identity
 
-**Not Applicable**
-
-No authentication system. Application is a standalone desktop automation tool with no user accounts or identity management.
+**Auth Provider:**
+- Not applicable - standalone desktop tool with no user accounts
+- Game authentication is handled by the user manually in their browser before starting the bot
 
 ## Monitoring & Observability
 
-**Logging:**
-- Console logging via Python's `print()` statements
-- GUI logging: Output to scrolled text widget in Game Control tab
-- Log levels: Not formally implemented
-- No external log aggregation
+**Error Tracking:**
+- None - errors logged to GUI scrolled text widget only
 
-**Error Handling:**
-- Try/except blocks for critical operations (mouse listeners, file I/O)
-- User-facing error dialogs via `tkinter.messagebox`
-- No error tracking service
-
-**Debugging:**
-- `mouseMonitoring.py` utility script for real-time mouse coordinate printing
-- Test scripts: `test_coordinates.py`, `test_playM_safe.py`, `test_setup.py`
+**Logs:**
+- In-app only via `log_message()` method in `gratta_e_vinci_gui.py`
+- Displayed in the Game Control tab's scrolled text area
+- No file-based logging, no log rotation
+- Messages use emoji prefixes for visual categorization
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Desktop application only - no hosting required
-- Runs locally on Windows machine
+- Local desktop only - no server or cloud deployment
 
 **CI Pipeline:**
-- Not applicable - no automated CI/CD
-- Manual setup via `setup.bat` batch script
-
-**Deployment:**
-- Manual: Copy project files to target Windows machine
-- Virtual environment setup: Run `setup.bat` once
-- Execution: Run `run_gui.bat` to start
+- None configured
 
 ## Environment Configuration
 
-**Required Environment:**
-- Windows OS (no environment variables required for operation)
-- Python 3.11 in system PATH for initial setup
-- `.venv` virtual environment with dependencies
+**Required env vars:**
+- None - all configuration via `gratta_settings.json`
 
-**No Environment Variables:**
-- No `.env` file used
-- All configuration via `gratta_settings.json`
+**Secrets location:**
+- Not applicable - no secrets or API keys
 
 ## Webhooks & Callbacks
 
-**Not Applicable**
+**Incoming:**
+- None
 
-No incoming or outgoing webhooks. Application is purely local with no network communication.
+**Outgoing:**
+- None
 
-## Browser Integration
+## Hardware/OS Integrations
 
-**Game Target:**
-- Game runs in web browser (specific website not specified in code)
-- Application controls mouse/keyboard to interact with browser-based "Gratta e Vinci" game
-- Game loads at configurable screen coordinates
+**Screen Interaction (primary integration):**
+- `pyautogui` - Reads screen size, performs mouse clicks at absolute screen coordinates
+  - Used in: `game_engine.py` (TkAutomationAdapter), `color_detector.py`, `mouseMonitoring.py`
+  - Failsafe: moving mouse to top-left corner triggers `pyautogui.FailSafeException`
 
-**Interaction Method:**
-- PyAutoGUI mouse control: Click coordinates for tiles, buttons
-- Pixel color detection: Read RGB values to determine game state
-- No JavaScript injection or DOM manipulation
-- No browser automation framework (Selenium, Playwright, etc.)
+**Screenshot Capture:**
+- `Pillow` (`PIL.ImageGrab`) - Captures single-pixel screenshots for color detection
+  - Used in: `color_detector.py` via `ImageGrab.grab(bbox=(x, y, x+1, y+1))`
+  - Reads RGB values to determine if a scratched tile is blue (win) or red (loss)
 
-## Dependencies with External Calls
+**Keyboard/Mouse Hooks:**
+- `pynput.keyboard.Listener` - Global keyboard hook for ESC key to stop game
+  - Used in: `game_engine.py` (GameEngine.start_keyboard_listener)
+- `pynput.mouse.Listener` - Global mouse hook for coordinate recording workflow
+  - Used in: `coordinate_manager.py` (CoordinateRecorder)
+  - Uses Win32-specific `win32_event_filter` for click suppression during recording
 
-**Pyautogui:**
-- Relies on OS mouse/keyboard APIs
-- `pyautogui.FAILSAFE = True` - Move mouse to top-left corner to abort automation
+## Browser Game Interface
 
-**Pynput:**
-- Keyboard listener with `win32_event_filter` for Windows-specific event filtering
-- Mouse listener with Windows button constant mapping
+The application automates a browser-based "Gratta e Vinci" scratch card game. Integration is entirely coordinate-based:
 
-## Offline Operation
+**Configured UI Elements (screen coordinates stored in settings):**
+- Play/Collect button: `play_x`, `play_y`
+- Raise bet button: `raise_x`, `raise_y`
+- Lower bet button: `lower_x`, `lower_y`
+- Raise difficulty button: `raise_diff_x`, `raise_diff_y`
+- Lower difficulty button: `lower_diff_x`, `lower_diff_y`
+- 25 tile positions (5x5 grid): `tiles` dict mapping tile number to `[x, y]`
 
-**Fully Offline:**
-- No internet connection required
-- No cloud sync
-- No update mechanism
-- No telemetry or analytics
+**Color Detection Protocol:**
+- After clicking a tile, reads pixel color at tile coordinates
+- Blue RGB(1, 108, 238) with tolerance +/-50 = positive tile (coin)
+- Red RGB(200, 13, 1) with tolerance +/-50 = negative tile (mine/loss)
+- Unknown color triggers retry loop with configurable delay
 
 ---
 
-*Integration audit: 2026-03-09*
+*Integration audit: 2026-03-10*

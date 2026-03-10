@@ -1,258 +1,155 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-03-09
+**Analysis Date:** 2026-03-10
 
 ## Tech Debt
 
-**Massive GUI file with mixed responsibilities:**
-- Issue: `gratta_e_vinci_gui.py` is 3201 lines, containing GUI, game logic, color detection, threading, async operations, and data persistence all in one class
-- Files: `gratta_e_vinci_gui.py`
-- Impact: Difficult to test, maintain, debug, or reuse game logic; high cyclomatic complexity
-- Fix approach: Refactor into separate modules: `GameEngine` (logic), `GUIController` (UI), `ColorDetector` (tile detection), `SettingsManager` (persistence)
+**Massive code duplication between GUI class and GameEngine:**
+- Issue: The `GrattaEVinciGUI` class in `gratta_e_vinci_gui.py` contains full legacy copies of nearly every method that was refactored into `game_engine.py`. Both the GUI class and `GameEngine` have their own implementations of `_get_round_config_for_strategy`, `_get_min_bet_for_selected_mode`, `_get_target_bet_for_try`, `_simulate_test_board`, `_apply_test_win`, `_apply_test_loss`, `_finish_test_mode`, `run_test_mode`, `run_game_async`, `validate_settings`, `initialize_game_variables`, `start_keyboard_listener`, and the full game loop (`_main_game_loop_legacy` / `_play_real_game_round_legacy`).
+- Files: `gratta_e_vinci_gui.py` (lines 401-535, 1276-1327, 1720-1830, 1832-2476), `game_engine.py`
+- Impact: The GUI class is 2963 lines when it should be ~1200. Any game logic fix must be applied in two places or behavior diverges. The `start_game` method dispatches to `game_engine.run_game_async()` but `start_test_mode` dispatches to `game_engine.run_test_mode()` while the GUI also has its own `run_test_mode` at line 1971 -- it is unclear which is actually invoked and whether they stay in sync.
+- Fix approach: Delete all `_legacy` methods and the duplicated `run_test_mode`, `validate_settings`, `initialize_game_variables`, `_simulate_test_board`, `_apply_test_win`, `_apply_test_loss`, `_finish_test_mode`, `_get_round_config_for_strategy`, `_get_min_bet_for_selected_mode`, `_get_target_bet_for_try` from `gratta_e_vinci_gui.py`. Route all calls through `GameEngine`.
 
-**Global state in playM.py:**
-- Issue: Game logic uses 30+ module-level global variables (`starting_cash`, `current_cash`, `bet`, `picks`, `tries`, `rounds`, `loss`, etc.)
-- Files: `playM.py` lines 64-80, 325+ function definitions that modify globals
-- Impact: Difficult to run parallel games, test independently, or reason about state changes; race conditions possible in multi-threaded environment
-- Fix approach: Create a `GameState` class to encapsulate all game variables; pass state object to functions
+**Legacy save/load settings methods still present:**
+- Issue: `_save_settings_legacy` (line 2777) and `_load_settings_legacy` (line 2829) duplicate `on_save_settings` / `on_load_settings` which already use `SettingsManager`. These legacy methods are ~130 lines of dead code.
+- Files: `gratta_e_vinci_gui.py` (lines 2777-2908)
+- Impact: Confusion about which code path is active. Dead code bloat.
+- Fix approach: Delete `_save_settings_legacy` and `_load_settings_legacy`.
 
-**Duplicate code across files:**
-- Issue: `playM.py` and `gratta_e_vinci_gui.py` contain identical logic: tile dictionaries, betting modes, color detection, game loop
-- Files: Both files define nearly identical constants (lines 16-106 in both), modes dictionary, WIN_MULTIPLIERS, Point class
-- Impact: Bug fixes must be applied in multiple places; inconsistent behavior between standalone and GUI versions
-- Fix approach: Create shared `game_config.py` module with all constants; import into both files
+**Legacy automation methods duplicated in GUI:**
+- Issue: `play_or_collect`, `increase_bet`, `decrease_bet`, `decrease_bet_force`, `set_bet_value`, `click_tile`, `decrease_difficulty_force`, `set_difficulty`, `generate_random_tile`, `execute_init_steps` all exist as instance methods on `GrattaEVinciGUI` (lines 1720-1830) AND as methods on `TkAutomationAdapter` / `GameEngine` in `game_engine.py`.
+- Files: `gratta_e_vinci_gui.py` (lines 1720-1830), `game_engine.py` (lines 16-96, 229-276)
+- Impact: Same duplication problem. The `start_game` flow uses `GameEngine` but the legacy methods still exist and could be called accidentally.
+- Fix approach: Remove all automation methods from `GrattaEVinciGUI` that are handled by `TkAutomationAdapter`.
 
-**Bare except clauses:**
-- Issue: Multiple `except:` without exception type (line 1037, 1854 in GUI)
-- Files: `gratta_e_vinci_gui.py` lines 1037, 1854
-- Impact: Silently suppresses all errors including KeyboardInterrupt, SystemExit, MemoryError
-- Fix approach: Replace with `except Exception as e:` and log the error; never catch BaseException
+**Placeholder simulation method still present:**
+- Issue: `simulate_game_round` at line 2410 is a placeholder with hardcoded 60% win rate and does not match any real game logic. It is never called but remains in the codebase.
+- Files: `gratta_e_vinci_gui.py` (lines 2410-2476)
+- Impact: Dead code that may confuse future developers.
+- Fix approach: Delete `simulate_game_round`.
 
-**Ignored exceptions in critical paths:**
-- Issue: `except Exception: pass` swallows errors during tile preview update and coordinate changes (line 1037-1038, 348, 1854)
-- Files: `gratta_e_vinci_gui.py` lines 1037, 348, 1854
-- Impact: Silent failures in UI updates, coordinate system, and listener cleanup make debugging impossible
-- Fix approach: Log exceptions with context; use separate error handling for recoverable vs. fatal errors
+**Legacy color detection method:**
+- Issue: `_read_color_at_point_legacy` (line 1832) takes a full-screen screenshot via `pyautogui.screenshot()` to read a single pixel, while the refactored `ColorDetector.read_color_at_point` uses `ImageGrab.grab(bbox=...)` for a 1x1 pixel crop (much faster). The legacy method is still called by `_play_real_game_round_legacy`.
+- Files: `gratta_e_vinci_gui.py` (line 1832-1851), `color_detector.py` (line 24-37)
+- Impact: If legacy game loop is ever triggered, color detection is orders of magnitude slower (full screenshot vs. 1px grab).
+- Fix approach: Delete `_read_color_at_point_legacy` and `is_color_in_range_blue`/`is_color_in_range_red` methods from the GUI class.
+
+**Orphaned Node.js/JavaScript project files:**
+- Issue: `package.json` and `package-lock.json` reference nut-js, jimp, tesseract.js -- a legacy JavaScript automation approach that is no longer used. The actual JS source files (`autoplay.js`, `playM.js`) have been deleted (shown in git status) but `package.json` remains.
+- Files: `package.json`, `package-lock.json`
+- Impact: Misleading -- suggests a Node.js project. `node_modules/` may still exist consuming disk space.
+- Fix approach: Delete `package.json`, `package-lock.json`, and `node_modules/` if present.
+
+**Unused dependencies in requirements.txt:**
+- Issue: `pytesseract`, `opencv-python`, and `numpy` are listed in `requirements.txt` but none are imported anywhere in the Python codebase. `pyautogui` is listed twice. These were likely from the JS-era OCR approach.
+- Files: `requirements.txt`
+- Impact: Unnecessary install time and dependency surface. Duplicate entry for pyautogui.
+- Fix approach: Remove `pytesseract`, `opencv-python`, `numpy`, and the duplicate `pyautogui` entry.
 
 ## Known Bugs
 
-**Hardcoded pause duration inconsistency:**
-- Symptoms: Game logic has hardcoded sleep values throughout code, but also has configurable pause variables that may not align
-- Files: `gratta_e_vinci_gui.py` lines 407-421 (configurable vars), but game loop uses hardcoded `await asyncio.sleep()` calls
-- Trigger: Run game with custom pause settings; observe that some operations still use hardcoded durations
-- Workaround: None; timing is baked into game loop execution
+**Color retry loop has no upper bound:**
+- Symptoms: If neither blue nor red color is detected (e.g., game animation still playing, overlay dialog appeared, or screen occluded), the color retry loop runs indefinitely, clicking nothing but retrying forever.
+- Files: `game_engine.py` (lines 352-427), `gratta_e_vinci_gui.py` (lines 2249-2405)
+- Trigger: Any screen obstruction, game popup, or unexpected pixel color at the tile position.
+- Workaround: Press ESC to stop. The loop does check `_is_stop_requested()` between retries.
 
-**Color detection tolerance mismatch:**
-- Symptoms: Color detection uses tolerance=50 by default for blue/red (lines 2221-2235), but error messages show different tolerances being checked
-- Files: `gratta_e_vinci_gui.py` line 508 mentions "tolerance 25" in debug output but actual check uses 50
-- Trigger: Tile detection fails on edge colors; debug output shows wrong tolerance value
-- Workaround: Adjust tile position or game lighting
-
-**Betting mode array index out of bounds risk:**
-- Symptoms: If tries counter exceeds betting mode array length, bet will be clamped to last value with no error
-- Files: `gratta_e_vinci_gui.py` lines 641-680 (`_get_target_bet_for_try` method)
-- Trigger: Reach more losses than betting mode steps defined (e.g., 15 losses with 11-step mode)
-- Workaround: Ensure max betting mode has enough steps; monitor tries counter
-
-**Grinding mode activation condition unclear:**
-- Symptoms: Grinding mode activates when `step_idx >= max_step_idx` AND bet equals GRINDING_STEP["b"] (lines 781-793)
-- Files: `gratta_e_vinci_gui.py` lines 769-793
-- Trigger: Confusing interaction between step indices and grinding; may activate unexpectedly
-- Workaround: Monitor logs for [GRIND] messages to confirm when grinding activates
-
-**Tile coordinate calculation breaks on missing values:**
-- Symptoms: If Tile 1 (X,Y) or top row X values are not set, calculated tiles will be at (0,0)
-- Files: `gratta_e_vinci_gui.py` lines 943-1004 (`update_all_tiles` method)
-- Trigger: Skip coordinate setup step, start game
-- Workaround: Always complete coordinate recording before starting game
+**`decrease_bet` docstring placement bug:**
+- Symptoms: In `gratta_e_vinci_gui.py` line 1738-1746, the `await asyncio.sleep(...)` call is placed BEFORE the docstring, meaning the docstring is a no-op string expression and the sleep happens before the method body comment. This is cosmetic but indicates the method was not carefully reviewed.
+- Files: `gratta_e_vinci_gui.py` (line 1738-1746)
 
 ## Security Considerations
 
-**Mouse control without rate limiting:**
-- Risk: `pyautogui.click()` is called without delays; rapid clicks could overwhelm browser or game
-- Files: `gratta_e_vinci_gui.py` lines 2120-2200 (game loop click operations), `playM.py` lines 152-182 (bet adjustment)
-- Current mitigation: Configurable pause variables (sleep_*_var) exist but some code paths use hardcoded delays
-- Recommendations: Make ALL click operations go through single function with enforced minimum delay; add rate limiter to prevent rapid-fire clicks
+**No input sanitization on imported JSON:**
+- Risk: `import_betting_modes` (line 1010) loads arbitrary JSON files chosen by the user. While it validates structure (dict of lists of numbers), there is no limit on the number of modes or values. A maliciously large file could consume memory.
+- Files: `gratta_e_vinci_gui.py` (lines 1010-1039)
+- Current mitigation: Basic type checking (dict, list, positive numbers).
+- Recommendations: Add size limits on imported data. Low priority since this is a local desktop app.
 
-**Screenshot pixels read directly without bounds checking:**
-- Risk: `pyautogui.screenshot().getpixel((x, y))` will crash if coordinates are outside screen bounds
-- Files: `gratta_e_vinci_gui.py` line 2207, `playM.py` line 277
-- Current mitigation: None; exception is caught generically
-- Recommendations: Add screen boundary validation before reading pixels; clamp coordinates to screen size
-
-**Keyboard listener global state:**
-- Risk: `escape_pressed` is global boolean modified by pynput listener thread; race condition if checked/modified simultaneously
-- Files: `gratta_e_vinci_gui.py` line 363 (instance var), `playM.py` line 84 (global), listener at lines 136-141
-- Current mitigation: Python GIL provides basic safety for boolean reads/writes, but not guaranteed atomic
-- Recommendations: Use `threading.Event` instead of bare boolean flag; atomic operations guaranteed by threading module
-
-**No timeout on keyboard listener cleanup:**
-- Risk: Listener threads may hang if `listener.stop()` encounters exception
-- Files: `gratta_e_vinci_gui.py` line 2290-2291, `playM.py` line 523
-- Current mitigation: Try/except at line 346-348 ignores exceptions silently
-- Recommendations: Implement timeout-based listener cleanup; log failures to detect hung threads
+**pyautogui failsafe is the only safety net:**
+- Risk: The automation controls the mouse and clicks on screen coordinates. If coordinates are misconfigured, it will click on arbitrary desktop locations (potentially other applications, system dialogs, or browser navigation).
+- Files: `game_engine.py` (all `pyautogui.click` calls), `gratta_e_vinci_gui.py` (lines 1720-1830)
+- Current mitigation: pyautogui's built-in failsafe (move mouse to top-left corner to abort), ESC key listener via pynput.
+- Recommendations: Add a coordinate bounds check before each click to ensure the target is within the expected game window region.
 
 ## Performance Bottlenecks
 
-**Screenshot capture on every tile click:**
-- Problem: Full screen screenshot taken for every color detection (25 tiles per round)
-- Files: `gratta_e_vinci_gui.py` line 2204, `playM.py` line 274
-- Cause: `pyautogui.screenshot()` captures entire screen to get one pixel
-- Improvement path: Use `PIL.ImageGrab.grab(bbox=...)` to capture only tile region; ~100x faster for small regions
+**Full-screen screenshot for single pixel (legacy path):**
+- Problem: `_read_color_at_point_legacy` in `gratta_e_vinci_gui.py` captures the entire screen to read one pixel.
+- Files: `gratta_e_vinci_gui.py` (lines 1832-1851)
+- Cause: Uses `pyautogui.screenshot()` (full screen) instead of `ImageGrab.grab(bbox=...)` (1px crop).
+- Improvement path: Already fixed in `color_detector.py`. Delete the legacy method.
 
-**No caching of screen resolution:**
-- Problem: Every screenshot returns full screen image; never reused
-- Files: `gratta_e_vinci_gui.py` lines 2202-2219
-- Cause: Each color read starts fresh capture
-- Improvement path: Grab single tile region around clicked coordinate; reuse if multiple reads needed
+**Mouse monitoring thread polls at 100ms:**
+- Problem: A daemon thread runs continuously polling `pyautogui.position()` every 100ms and scheduling two Tkinter `root.after` callbacks per cycle, even when the coordinates tab is not visible.
+- Files: `gratta_e_vinci_gui.py` (lines 1472-1492)
+- Cause: Continuous polling with no tab-visibility check.
+- Improvement path: Only poll when the coordinates or settings tab is active, or use pynput mouse listener for event-driven updates instead of polling.
 
-**Redundant bet array lookups:**
-- Problem: `_get_target_bet_for_try()` searches `betting_modes[mode]` array and uses `min(tries, len-1)` (line 661)
-- Files: `gratta_e_vinci_gui.py` lines 641-680
-- Cause: No index caching between rounds
-- Improvement path: Pre-compute or cache current mode's bet sequence at round start
-
-**Synchronous sleep in async game loop:**
-- Problem: Uses `await asyncio.sleep()` in game loop but also has hardcoded `time.sleep()` in some operations
-- Files: `gratta_e_vinci_gui.py` lines 2420-2500 (game loop), mixed sync/async
-- Cause: Mixing of async and sync pauses
-- Improvement path: Consolidate all pauses to use `await asyncio.sleep()` consistently
+**Test mode logging every round for first 5 rounds:**
+- Problem: In `GameEngine.run_test_mode` and the GUI's `run_test_mode`, every round generates multiple log messages inserted into the ScrolledText widget via `root.after`. For large simulations (10000+ rounds), the ScrolledText widget accumulates unbounded text, slowing the UI.
+- Files: `game_engine.py` (lines 544-634), `gratta_e_vinci_gui.py` (lines 1971-2062)
+- Cause: No log rotation or truncation.
+- Improvement path: Limit the ScrolledText to the last N lines (e.g., 5000), or use verbose logging only for first/last N rounds and every Nth round.
 
 ## Fragile Areas
 
-**Mouse coordinate system dependency:**
-- Files: All game logic depends on tile coordinates from `tiles` dict (lines 90-191 in JSON)
-- Why fragile: If browser window moves, resizes, or game scales differently, all 25 coordinates become invalid; mouse will click wrong tiles
-- Safe modification: Add dynamic coordinate calibration on startup; record reference tile, measure actual position, adjust all offsets
-- Test coverage: Only manual testing; no automated bounds checking
+**Bet value synchronization with game UI:**
+- Files: `game_engine.py` (lines 229-241), `gratta_e_vinci_gui.py` (lines 1762-1775)
+- Why fragile: The bot tracks `self.bet` internally and assumes each `increase_bet` / `decrease_bet` click moves the game's bet by exactly one step in `BET_VALUES`. If the game UI lags, has a different bet step list, or a click is missed, the internal bet value diverges from the actual game bet. There is no visual verification of the actual bet amount.
+- Safe modification: Any change to bet adjustment logic must update both `TkAutomationAdapter` methods and ensure the internal tracking stays synchronized. Consider adding OCR-based bet verification.
+- Test coverage: None.
 
-**Color detection hardcoded tolerances:**
-- Files: `gratta_e_vinci_gui.py` lines 2221-2235, hardcoded tolerance=50 for RGB range
-- Why fragile: Different lighting, screen brightness, or game update changes tile colors; detection fails silently
-- Safe modification: Make tolerance configurable in Settings tab; add calibration mode to measure actual colors
-- Test coverage: No unit tests for color detection; relies on in-game testing
+**Color detection depends on exact pixel position:**
+- Files: `color_detector.py`, `game_engine.py` (lines 352-427)
+- Why fragile: Color is read at the exact tile center coordinate. If the game window is scrolled, resized, or the tile animation is still playing, the pixel will not match blue or red, triggering the infinite retry loop.
+- Safe modification: Increase tolerance cautiously. Consider reading a small region (e.g., 5x5 pixels) and using majority color.
+- Test coverage: None.
 
-**Custom betting mode array structure:**
-- Files: `gratta_e_vinci_gui.py` lines 398-401, custom mode defined as list of dicts with 'b', 'p', 'd' keys
-- Why fragile: If mode editor accidentally creates malformed dicts or missing keys, game crashes during `_get_round_config_for_strategy()`
-- Safe modification: Add schema validation on load; use dataclass or TypedDict for custom mode structure
-- Test coverage: No validation of custom mode format before use
+**Coordinate system assumes fixed screen position:**
+- Files: `coordinate_manager.py`, all tile coordinate logic
+- Why fragile: All 25 tile positions and 5 control button positions are absolute screen coordinates. If the browser window moves, zooms, or the display scaling changes, all coordinates become invalid.
+- Safe modification: Re-record coordinates using the CoordinateRecorder before each session.
+- Test coverage: None.
 
-**Thread safety of game_running flag:**
-- Files: `gratta_e_vinci_gui.py` line 362, 2256, used in game loop threads
-- Why fragile: Boolean flag checked in while loops without synchronization; potential race conditions
-- Safe modification: Replace with `threading.Event` for atomic operations
-- Test coverage: No stress tests; race condition may be rare but possible under high load
+**GUI-to-engine coupling via `self.app`:**
+- Files: `game_engine.py` (entire file), `gratta_e_vinci_gui.py`
+- Why fragile: `GameEngine` and `TkAutomationAdapter` both hold a reference to the GUI `app` object and directly read/write its instance variables (`self.app.bet`, `self.app.tries`, `self.app.current_cash`, `self.app.grinding_active`, etc.). This tight coupling means any GUI refactor risks breaking the engine.
+- Safe modification: Extract game state into a dedicated data class. Have the engine own the state and push updates to the GUI via callbacks.
+- Test coverage: None.
 
 ## Scaling Limits
 
-**Single-threaded game loop blocks UI:**
-- Current capacity: Runs in daemon thread, but event loop blocks on pyautogui operations
-- Limit: Any slow mouse operation (retry loops, screenshot capture) blocks all UI updates
-- Scaling path: Move game loop to truly async thread with proper event loop; use separate thread pool for blocking I/O
-
-**Betting mode array length fixed:**
-- Current capacity: Modes defined with 11-20 steps max; tries counter can exceed array bounds
-- Limit: More than 20 consecutive losses will exhaust mode array
-- Scaling path: Implement dynamic bet scaling or wrap-around; allow arbitrary mode length
-
-**Tile grid hardcoded to 5x5:**
-- Current capacity: 25 tiles only; TEST_MODE_BOARD_SIZE=25 hardcoded
-- Limit: Cannot support different board sizes or variable grid shapes
-- Scaling path: Make grid size configurable; parameterize all game calculations
-
-**Test mode board simulation limited:**
-- Current capacity: Simple uniform random mine distribution
-- Limit: No variance in difficulty; always same number of mines regardless of actual game RNG
-- Scaling path: Add configurable mine distribution models; support historical data from real games
+**ScrolledText widget as log sink:**
+- Current capacity: Works well for hundreds of log lines.
+- Limit: At 10,000+ lines (common in test mode with many rounds), Tkinter's Text widget becomes noticeably slow for insertions and scrolling.
+- Scaling path: Implement a ring buffer that keeps only the last N lines, or write logs to file and display a tail view.
 
 ## Dependencies at Risk
 
-**pyautogui 0.9.54 (2018):**
-- Risk: Unmaintained for 5+ years; no recent updates
-- Impact: Security vulnerabilities in screenshot functionality; compatibility issues with newer Windows/Python versions
-- Migration plan: Consider replacement with `pynput` (already used for keyboard) or `pyperclip` + Windows API
-
-**pytesseract 0.3.10:**
-- Risk: Only imported but commented out (playM.py line 3); dead code
-- Impact: Unused dependency adds security surface; increases install size
-- Migration plan: Remove from requirements.txt if OCR is not needed; if needed, activate and test
-
-**pynput 1.8.1 (2020):**
-- Risk: Stale but still maintained; used for mouse/keyboard listeners
-- Impact: Listener threads may hang on cleanup; known issues with Windows 11
-- Migration plan: Monitor for newer 1.9+ versions; test on target Windows version before deployment
-
-**Pillow 10.4.0:**
-- Risk: Used only for screenshot, not directly imported (via pyautogui)
-- Impact: Version locked to specific pyautogui; updates may introduce breaking changes
-- Migration plan: Update pyautogui to use latest Pillow; verify color detection still works
+**pyautogui 0.9.54:**
+- Risk: pyautogui has known issues with high-DPI displays on Windows and may not correctly report mouse positions or take screenshots at the expected coordinates when display scaling is not 100%.
+- Impact: Tile clicks miss their targets; color detection reads wrong pixels.
+- Migration plan: Consider using the `pygetwindow` + `mss` combo for faster screenshots, or pynput for mouse control (already a dependency).
 
 ## Missing Critical Features
 
-**No game state persistence during crash:**
-- Problem: If application crashes or is force-killed, all game progress (rounds played, cash earned, bets placed) is lost
-- Blocks: Cannot resume after system failure; full session must restart
-- Suggestion: Implement transaction log of each game action; save after every round
+**No coordinate validation before game start:**
+- Problem: The game can be started with all tile coordinates set to (0, 0) or with control button coordinates at default values that do not match the actual game window position. There is no pre-flight check.
+- Blocks: Users can accidentally start automation with wrong coordinates, wasting real money.
 
-**No real-time game state validation:**
-- Problem: GUI trusts reported balance without verifying against visible game UI
-- Blocks: Cannot detect if game desyncs from automation state
-- Suggestion: Add periodic OCR or pixel pattern matching to verify current balance on screen
-
-**No automatic difficulty adjustment:**
-- Problem: User must manually set difficulty button coordinates if game UI changes
-- Blocks: Cannot adapt to game updates; brittle to screen resolution changes
-- Suggestion: Add auto-calibration mode that tests clicks and verifies results
-
-**No min/max bet enforcement:**
-- Problem: Betting modes array can contain values outside game's allowed bet range
-- Blocks: Invalid bets cause silent failures
-- Suggestion: Add bet validation that clamps values to game's actual min (0.1) and max (20.0)
-
-**No multi-account support:**
-- Problem: Single settings file; cannot manage multiple game accounts
-- Blocks: Must restart application to test different betting strategies in parallel
-- Suggestion: Add account profiles; allow saving/loading different configurations
+**No visual confirmation of game state:**
+- Problem: The bot never verifies that the game actually started a round, that a bet was placed, or that the result screen appeared. It relies entirely on timing (sleep durations) and assumes every click had its intended effect.
+- Blocks: Reliable unattended operation. Any network lag, popup, or animation delay can desynchronize the bot.
 
 ## Test Coverage Gaps
 
-**No unit tests for game logic:**
-- What's not tested: `_apply_test_win()`, `_apply_test_loss()`, bet calculations, grinding logic
-- Files: `gratta_e_vinci_gui.py` lines 728-803
-- Risk: Regressions in core game mechanics go undetected; betting strategy changes break silently
-- Priority: **High** — test core game state transitions
-
-**No integration tests for coordinate system:**
-- What's not tested: Tile grid calculation, coordinate recording, preview generation
-- Files: `gratta_e_vinci_gui.py` lines 943-1004, 847-1068 (CoordinateRecorder)
-- Risk: Grid miscalculation affects all game operations; caught only at runtime
-- Priority: **High** — test auto-calculated tile positions against known grids
-
-**No color detection unit tests:**
-- What's not tested: `is_color_in_range_blue()`, `is_color_in_range_red()`, tolerance validation
-- Files: `gratta_e_vinci_gui.py` lines 2221-2235
-- Risk: Color detection edge cases cause missed tiles; tolerance changes break detection
-- Priority: **Medium** — add parametrized color matching tests
-
-**No betting mode validation tests:**
-- What's not tested: Custom mode schema, mode array bounds, bet value validation
-- Files: `gratta_e_vinci_gui.py` lines 398-401, 641-680
-- Risk: Invalid modes not caught until game reaches that step
-- Priority: **Medium** — validate modes on load, not at runtime
-
-**No thread safety tests:**
-- What's not tested: Race conditions on `escape_pressed`, `game_running`, shared state between listener threads
-- Files: `gratta_e_vinci_gui.py` lines 363, 2257
-- Risk: Rare race conditions cause intermittent crashes or incorrect behavior
-- Priority: **Medium** — add thread stress tests
-
-**No error recovery tests:**
-- What's not tested: Exception handling paths, listener cleanup, recovery from screenshot failures
-- Files: `gratta_e_vinci_gui.py` lines 2202-2219, 340-351
-- Risk: Errors during critical operations leave game in invalid state
-- Priority: **Low** — add error injection tests after main test suite
+**No tests exist:**
+- What's not tested: The entire codebase has zero test files. No unit tests, no integration tests, no end-to-end tests.
+- Files: All `.py` files
+- Risk: Any refactoring (especially deleting the massive duplicated code) has no safety net. Game logic correctness (Martingale progression, win/loss calculation, grinding mode activation/deactivation) is unverified.
+- Priority: High. At minimum, test `GameEngine._get_round_config_for_strategy`, `_apply_test_win`, `_apply_test_loss`, `SettingsManager.validate`, `SettingsManager.merge_with_defaults`, `ColorDetector.is_color_in_range_blue/red`, and `CoordinateManager.populate_tile_vars`.
 
 ---
 
-*Concerns audit: 2026-03-09*
+*Concerns audit: 2026-03-10*
