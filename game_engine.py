@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 import time
 from typing import Any
@@ -640,3 +641,214 @@ class GameEngine:
             loop.run_until_complete(self.main_game_loop())
         finally:
             loop.close()
+
+    # ---- Bulk Test ----
+
+    def _build_bulk_snapshot(self):
+        """Capture all settings needed for bulk simulation from the GUI (called once)."""
+        mode = self.app.mode_var.get()
+        if mode == "custom" and self.app.custom_mode:
+            betting_sequence = [step["b"] for step in self.app.custom_mode]
+        elif mode in self.app.bulk_betting_modes:
+            betting_sequence = list(self.app.bulk_betting_modes[mode])
+        else:
+            betting_sequence = [0.1]
+
+        win_multipliers = {
+            d: {p: self.app.bulk_win_multiplier_vars[d][p].get() for p in [1, 2, 3, 4]}
+            for d in ["low", "medium", "high"]
+        }
+        mine_config = {
+            d: self.app.bulk_mine_config_vars[d].get()
+            for d in ["low", "medium", "high"]
+        }
+
+        return {
+            "starting_cash": self.app.starting_cash_var.get(),
+            "target_profit": self.app.target_win_var.get() - self.app.starting_cash_var.get(),
+            "max_loss": self.app.max_loss_var.get(),
+            "max_rounds": self.app.max_rounds_var.get(),
+            "mode": mode,
+            "betting_sequence": betting_sequence,
+            "max_picks": self.app.max_picks_var.get(),
+            "difficulty": self.app.difficulty_var.get(),
+            "grinding_enabled": bool(self.app.grinding_mode_var.get()),
+            "grinding_range": self.app.grinding_range_var.get(),
+            "p_random": bool(self.app.grinding_p_random_var.get()),
+            "win_multipliers": win_multipliers,
+            "mine_config": mine_config,
+        }
+
+    def run_bulk_test(self, n_runs, progress_cb, log_cb, stop_check, show_logs):
+        """Run n_runs independent simulations and return aggregated results."""
+        snapshot = self._build_bulk_snapshot()
+        target_profit = snapshot["target_profit"]
+        max_loss = snapshot["max_loss"]
+
+        # Build threshold ranges
+        if target_profit <= 100:
+            profit_step = 1
+        else:
+            profit_step = math.ceil(target_profit / 100)
+        profit_thresholds = list(range(profit_step, int(math.ceil(target_profit / profit_step) * profit_step) + 1, profit_step))
+        if not profit_thresholds or profit_thresholds[-1] < target_profit:
+            profit_thresholds.append(int(math.ceil(target_profit)))
+
+        loss_step = 5
+        max_loss_ceil = max(loss_step, math.ceil(max_loss / loss_step) * loss_step)
+        loss_thresholds = list(range(loss_step, max_loss_ceil + 1, loss_step))
+
+        success_counts = {(L, P): 0 for L in loss_thresholds for P in profit_thresholds}
+
+        runs_completed = 0
+        for i in range(n_runs):
+            if stop_check():
+                break
+            profit_reached = self._run_single_bulk_game(snapshot)
+
+            for P, max_dd in profit_reached.items():
+                for L in loss_thresholds:
+                    if max_dd <= L:
+                        success_counts[(L, P)] += 1
+
+            runs_completed = i + 1
+            progress_cb(runs_completed, n_runs)
+
+            if show_logs():
+                reached_target = any(p >= target_profit for p in profit_reached)
+                max_dd_final = max(profit_reached.values()) if profit_reached else 0
+                status = "TARGET" if reached_target else "STOP"
+                log_cb(f"[Run {runs_completed}] {status} | Profits reached: {len(profit_reached)} | Max DD: {max_dd_final:.2f}")
+
+            if show_logs() and runs_completed % 2 == 0:
+                log_cb("__CLEAR__")
+
+        return (success_counts, profit_thresholds, loss_thresholds, snapshot, runs_completed)
+
+    def _simulate_bulk_board(self, mine_count, max_picks):
+        """Pure board simulation with explicit mine_count (no global access)."""
+        board = ["mine"] * mine_count + ["coin"] * (TEST_MODE_BOARD_SIZE - mine_count)
+        random.shuffle(board)
+        coins_found = 0
+        hit_mine = False
+        indices = list(range(TEST_MODE_BOARD_SIZE))
+        random.shuffle(indices)
+        for idx in indices[:max_picks]:
+            if board[idx] == "mine":
+                hit_mine = True
+                break
+            coins_found += 1
+        return coins_found, hit_mine
+
+    def _run_single_bulk_game(self, snap):
+        """Run one full simulation. Returns {profit_threshold: max_dd_when_first_reached}."""
+        cash = snap["starting_cash"]
+        starting_cash = cash
+        target_profit = snap["target_profit"]
+        max_loss = snap["max_loss"]
+        max_rounds = snap["max_rounds"]
+        sequence = snap["betting_sequence"]
+        max_picks = snap["max_picks"]
+        difficulty = snap["difficulty"]
+        grinding_enabled = snap["grinding_enabled"]
+        grinding_range = snap["grinding_range"]
+        p_random = snap["p_random"]
+        win_mults = snap["win_multipliers"]
+        mine_cfg = snap["mine_config"]
+
+        highest = cash
+        max_dd_so_far = 0.0
+        tries = 0
+        rounds = 0
+        max_step = len(sequence) - 1
+        grinding_active = False
+        grinding_saved_balance = None
+        profit_reached = {}
+
+        while rounds < max_rounds:
+            # Determine current round params
+            if grinding_active:
+                rd = "high"
+                mp = self._bulk_grinding_picks(cash, grinding_saved_balance, p_random, win_mults)
+                bet = GRINDING_STEP["b"]
+            else:
+                rd = difficulty
+                mp = max_picks
+                bet = sequence[min(tries, max_step)]
+
+            if cash < bet:
+                break
+
+            cash = round(cash - bet, 2)
+
+            mine_count = mine_cfg[rd]
+            multiplier = win_mults[rd][mp]
+            coins_found, hit_mine = self._simulate_bulk_board(mine_count, mp)
+
+            if hit_mine:
+                # Loss
+                step_idx = min(tries, max_step)
+                if grinding_enabled and not grinding_active and step_idx == 0:
+                    grinding_saved_balance = round(highest - grinding_range, 2)
+                tries += 1
+                reached_top = step_idx >= max_step
+                if grinding_enabled and not grinding_active and reached_top and round(bet, 2) == round(GRINDING_STEP["b"], 2) and grinding_saved_balance is not None:
+                    grinding_active = True
+                if grinding_active:
+                    pass  # bet will be set next iteration
+                # no bet update needed here, it's recalculated at loop top
+            else:
+                # Win
+                win_amount = round(bet * multiplier, 2)
+                cash = round(cash + win_amount, 2)
+                if cash > highest:
+                    highest = round(cash, 2)
+                if grinding_active:
+                    if grinding_saved_balance is not None and cash >= grinding_saved_balance:
+                        grinding_active = False
+                        tries = 0
+                else:
+                    tries = 0
+
+            if cash > highest:
+                highest = round(cash, 2)
+            current_dd = round(highest - cash, 2)
+            if current_dd > max_dd_so_far:
+                max_dd_so_far = current_dd
+
+            # Check profit thresholds
+            profit = round(cash - starting_cash, 2)
+            if profit > 0:
+                # Check each integer threshold up to target
+                step = 1 if target_profit <= 100 else math.ceil(target_profit / 100)
+                p_val = step
+                while p_val <= profit and p_val <= target_profit:
+                    if p_val not in profit_reached:
+                        profit_reached[p_val] = max_dd_so_far
+                    p_val += step
+                # Also check the exact target
+                if profit >= target_profit and target_profit not in profit_reached:
+                    profit_reached[int(math.ceil(target_profit))] = max_dd_so_far
+
+            rounds += 1
+
+            # Stop conditions
+            if profit >= target_profit:
+                break
+            if max_dd_so_far >= max_loss:
+                break
+
+        return profit_reached
+
+    @staticmethod
+    def _bulk_grinding_picks(cash, grinding_saved_balance, p_random, win_mults):
+        """Determine picks during grinding (pure, no self.app access)."""
+        b = GRINDING_STEP["b"]
+        target = grinding_saved_balance if grinding_saved_balance is not None else 0
+        for p in [1, 2, 3]:
+            projected = cash + (b * win_mults["high"][p])
+            if projected >= target:
+                return p
+        if p_random:
+            return random.randint(1, 3)
+        return 3

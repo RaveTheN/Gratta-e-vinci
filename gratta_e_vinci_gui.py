@@ -108,10 +108,28 @@ class GrattaEVinciGUI:
         self.sleep_init_lower_diff_var = tk.DoubleVar(value=0.4)
         self.sleep_init_click_var = tk.DoubleVar(value=0.3)
         
+        # Bulk Test variables
+        self.bulk_n_runs_var = tk.IntVar(value=100)
+        self.bulk_show_logs_var = tk.BooleanVar(value=True)
+        self.bulk_test_running = False
+        self.bulk_test_stop = False
+        self._bulk_results = None
+
+        # Bulk advanced params (local overrides, initialized from game_config defaults)
+        self.bulk_betting_modes = {k: list(v) for k, v in BETTING_MODES.items()}
+        self.bulk_bet_values = list(BET_VALUES)
+        self.bulk_win_multiplier_vars = {
+            d: {p: tk.DoubleVar(value=WIN_MULTIPLIERS[d][p]) for p in [1, 2, 3, 4]}
+            for d in ["low", "medium", "high"]
+        }
+        self.bulk_mine_config_vars = {
+            d: tk.IntVar(value=TEST_MODE_MINE_CONFIG[d]) for d in ["low", "medium", "high"]
+        }
+
         # Create GUI
         self.create_widgets()
         self.on_load_settings()
-        
+
         # Start mouse coordinate monitoring
         self.start_mouse_monitoring()
 
@@ -158,6 +176,11 @@ class GrattaEVinciGUI:
         stats_frame = ttk.Frame(notebook)
         notebook.add(stats_frame, text="Statistics")
         self.create_stats_tab(stats_frame)
+
+        # Bulk Test Tab
+        bulk_frame = ttk.Frame(notebook)
+        notebook.add(bulk_frame, text="Bulk Test")
+        self.create_bulk_test_tab(bulk_frame)
 
         # Pauses Tab
         pauses_frame = ttk.Frame(notebook)
@@ -2937,10 +2960,405 @@ class GrattaEVinciGUI:
             self._on_mode_changed_settings()
             messagebox.showinfo("Reset", "Settings reset to defaults!")
     
+    # ---- Bulk Test Tab ----
+
+    def create_bulk_test_tab(self, parent):
+        """Create the Bulk Test tab with scrollable content."""
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Enable mousewheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # --- Controls ---
+        ctrl_frame = ttk.LabelFrame(scroll_frame, text="Bulk Test", padding=10)
+        ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        ttk.Label(ctrl_frame, text="Ripetizioni:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.bulk_n_runs_entry = ttk.Entry(ctrl_frame, textvariable=self.bulk_n_runs_var, width=10)
+        self.bulk_n_runs_entry.grid(row=0, column=1, padx=5, pady=2)
+
+        self.bulk_show_logs_check = ttk.Checkbutton(ctrl_frame, text="Mostra log", variable=self.bulk_show_logs_var,
+                                                     command=self._toggle_bulk_log_frame)
+        self.bulk_show_logs_check.grid(row=0, column=2, padx=10, pady=2)
+
+        btn_frame = ttk.Frame(ctrl_frame)
+        btn_frame.grid(row=1, column=0, columnspan=4, pady=5)
+        self.bulk_start_button = ttk.Button(btn_frame, text="AVVIA BULK TEST", command=self.start_bulk_test)
+        self.bulk_start_button.pack(side=tk.LEFT, padx=5)
+        self.bulk_stop_button = ttk.Button(btn_frame, text="FERMA", command=self.stop_bulk_test, state="disabled")
+        self.bulk_stop_button.pack(side=tk.LEFT, padx=5)
+
+        # Progress
+        self.bulk_progress_var = tk.DoubleVar(value=0)
+        self.bulk_progress_bar = ttk.Progressbar(ctrl_frame, variable=self.bulk_progress_var, maximum=100, length=400)
+        self.bulk_progress_bar.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=2, padx=5)
+        self.bulk_progress_label = ttk.Label(ctrl_frame, text="0/0 (0%)")
+        self.bulk_progress_label.grid(row=2, column=3, padx=5)
+        self.bulk_status_label = ttk.Label(ctrl_frame, text="In attesa")
+        self.bulk_status_label.grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=2)
+
+        # --- Log (optional) ---
+        self.bulk_log_frame = ttk.LabelFrame(scroll_frame, text="Log", padding=5)
+        self.bulk_log_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.bulk_log_text = scrolledtext.ScrolledText(self.bulk_log_frame, height=8, state="normal",
+                                                        font=("Courier", 9))
+        self.bulk_log_text.pack(fill=tk.X)
+
+        # --- Advanced Params ---
+        adv_frame = ttk.LabelFrame(scroll_frame, text="Parametri Avanzati", padding=10)
+        adv_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # WIN_MULTIPLIERS grid
+        ttk.Label(adv_frame, text="WIN_MULTIPLIERS:", font=("", 10, "bold")).grid(row=0, column=0, columnspan=5,
+                                                                                    sticky=tk.W, pady=(0, 5))
+        for col_i, p in enumerate([1, 2, 3, 4]):
+            ttk.Label(adv_frame, text=f"p={p}").grid(row=1, column=col_i + 1, padx=5)
+        for row_i, d in enumerate(["low", "medium", "high"]):
+            ttk.Label(adv_frame, text=f"{d}:").grid(row=row_i + 2, column=0, sticky=tk.W, padx=5)
+            for col_i, p in enumerate([1, 2, 3, 4]):
+                ttk.Entry(adv_frame, textvariable=self.bulk_win_multiplier_vars[d][p], width=6).grid(
+                    row=row_i + 2, column=col_i + 1, padx=3, pady=1)
+
+        # MINE_CONFIG
+        ttk.Label(adv_frame, text="MINE_CONFIG (mines per difficulty):", font=("", 10, "bold")).grid(
+            row=6, column=0, columnspan=5, sticky=tk.W, pady=(10, 5))
+        for col_i, d in enumerate(["low", "medium", "high"]):
+            ttk.Label(adv_frame, text=f"{d}:").grid(row=7, column=col_i * 2, sticky=tk.E, padx=2)
+            ttk.Spinbox(adv_frame, from_=0, to=24, textvariable=self.bulk_mine_config_vars[d], width=4).grid(
+                row=7, column=col_i * 2 + 1, padx=2)
+
+        # BETTING_MODES / BET_VALUES buttons
+        btn_adv_frame = ttk.Frame(adv_frame)
+        btn_adv_frame.grid(row=8, column=0, columnspan=5, pady=10)
+        ttk.Button(btn_adv_frame, text="Modifica sequenze BETTING_MODES",
+                   command=self.open_bulk_betting_modes_editor).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_adv_frame, text="Modifica BET_VALUES",
+                   command=self.open_bulk_bet_values_editor).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_adv_frame, text="Ripristina defaults",
+                   command=self.reset_bulk_advanced_params).pack(side=tk.LEFT, padx=5)
+
+        # --- Export ---
+        export_frame = ttk.Frame(scroll_frame)
+        export_frame.pack(fill=tk.X, padx=5, pady=10)
+        self.bulk_export_button = ttk.Button(export_frame, text="ESPORTA EXCEL", command=self.export_bulk_excel,
+                                              state="disabled")
+        self.bulk_export_button.pack()
+
+    def _toggle_bulk_log_frame(self):
+        if self.bulk_show_logs_var.get():
+            self.bulk_log_frame.pack(fill=tk.X, padx=5, pady=5)
+        else:
+            self.bulk_log_frame.pack_forget()
+
+    # ---- Bulk Test Control ----
+
+    def start_bulk_test(self):
+        n = self.bulk_n_runs_var.get()
+        if n <= 0:
+            messagebox.showerror("Errore", "Il numero di ripetizioni deve essere > 0")
+            return
+        self.bulk_test_running = True
+        self.bulk_test_stop = False
+        self._bulk_results = None
+        self.bulk_start_button.config(state="disabled")
+        self.bulk_stop_button.config(state="normal")
+        self.bulk_export_button.config(state="disabled")
+        self.bulk_progress_var.set(0)
+        self.bulk_progress_label.config(text=f"0/{n} (0%)")
+        self.bulk_status_label.config(text="In esecuzione...")
+        self.bulk_log_text.delete("1.0", tk.END)
+        threading.Thread(target=self._bulk_test_worker, daemon=True).start()
+
+    def stop_bulk_test(self):
+        self.bulk_test_stop = True
+        self.bulk_status_label.config(text="Interruzione in corso...")
+
+    def _bulk_test_worker(self):
+        n = self.bulk_n_runs_var.get()
+        try:
+            results = self.game_engine.run_bulk_test(
+                n_runs=n,
+                progress_cb=self._bulk_update_progress,
+                log_cb=self._bulk_log_message,
+                stop_check=lambda: self.bulk_test_stop,
+                show_logs=lambda: self.bulk_show_logs_var.get(),
+            )
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Errore Bulk Test", str(e)))
+            self.root.after(0, self._on_bulk_test_failed)
+            return
+        self.root.after(0, lambda: self._on_bulk_test_complete(results))
+
+    def _on_bulk_test_complete(self, results):
+        self.bulk_test_running = False
+        self._bulk_results = results
+        runs = results[4]
+        n = self.bulk_n_runs_var.get()
+        self.bulk_start_button.config(state="normal")
+        self.bulk_stop_button.config(state="disabled")
+        self.bulk_export_button.config(state="normal")
+        self.bulk_status_label.config(text=f"Completato {runs}/{n} - Pronto per export")
+
+    def _on_bulk_test_failed(self):
+        self.bulk_test_running = False
+        self.bulk_start_button.config(state="normal")
+        self.bulk_stop_button.config(state="disabled")
+        self.bulk_status_label.config(text="Errore durante l'esecuzione")
+
+    def _bulk_log_message(self, msg):
+        def _do():
+            if msg == "__CLEAR__":
+                self.bulk_log_text.delete("1.0", tk.END)
+            else:
+                self.bulk_log_text.insert(tk.END, msg + "\n")
+                self.bulk_log_text.see(tk.END)
+        self.root.after(0, _do)
+
+    def _bulk_update_progress(self, i, n):
+        pct = int(i / n * 100) if n > 0 else 0
+        self.root.after(0, lambda: self.bulk_progress_var.set(pct))
+        self.root.after(0, lambda: self.bulk_progress_label.config(text=f"{i}/{n} ({pct}%)"))
+
+    def _clear_bulk_log(self):
+        self.root.after(0, lambda: self.bulk_log_text.delete("1.0", tk.END))
+
+    # ---- Bulk Advanced Param Editors ----
+
+    def open_bulk_betting_modes_editor(self):
+        win = tk.Toplevel(self.root)
+        win.title("Modifica BETTING_MODES (Bulk)")
+        win.geometry("500x400")
+        win.grab_set()
+
+        texts = {}
+        for mode_name in ["normal", "medium", "high", "safe"]:
+            frame = ttk.LabelFrame(win, text=mode_name, padding=5)
+            frame.pack(fill=tk.X, padx=10, pady=5)
+            t = tk.Text(frame, height=2, width=60)
+            t.insert("1.0", ", ".join(str(v) for v in self.bulk_betting_modes.get(mode_name, [])))
+            t.pack(fill=tk.X)
+            texts[mode_name] = t
+
+        def on_save():
+            for mode_name, t in texts.items():
+                raw = t.get("1.0", tk.END).strip()
+                if not raw:
+                    self.bulk_betting_modes[mode_name] = []
+                    continue
+                try:
+                    vals = [float(x.strip()) for x in raw.split(",") if x.strip()]
+                    if any(v <= 0 for v in vals):
+                        raise ValueError("Valori devono essere positivi")
+                    self.bulk_betting_modes[mode_name] = vals
+                except ValueError as e:
+                    messagebox.showerror("Errore", f"Errore in {mode_name}: {e}")
+                    return
+            win.destroy()
+
+        ttk.Button(win, text="Salva", command=on_save).pack(pady=10)
+
+    def open_bulk_bet_values_editor(self):
+        win = tk.Toplevel(self.root)
+        win.title("Modifica BET_VALUES (Bulk)")
+        win.geometry("500x200")
+        win.grab_set()
+
+        ttk.Label(win, text="Valori bet validi (separati da virgola):").pack(padx=10, pady=5, anchor=tk.W)
+        t = tk.Text(win, height=4, width=60)
+        t.insert("1.0", ", ".join(str(v) for v in self.bulk_bet_values))
+        t.pack(fill=tk.X, padx=10)
+        ttk.Label(win, text="Nota: usato per validazione nell'editor BETTING_MODES, non influisce sulla simulazione.",
+                  wraplength=480).pack(padx=10, pady=5)
+
+        def on_save():
+            raw = t.get("1.0", tk.END).strip()
+            try:
+                vals = [float(x.strip()) for x in raw.split(",") if x.strip()]
+                if any(v <= 0 for v in vals):
+                    raise ValueError("Valori devono essere positivi")
+                if len(vals) != len(set(vals)):
+                    raise ValueError("Valori devono essere univoci")
+                self.bulk_bet_values = sorted(vals)
+            except ValueError as e:
+                messagebox.showerror("Errore", str(e))
+                return
+            win.destroy()
+
+        ttk.Button(win, text="Salva", command=on_save).pack(pady=10)
+
+    def reset_bulk_advanced_params(self):
+        self.bulk_betting_modes = {k: list(v) for k, v in BETTING_MODES.items()}
+        self.bulk_bet_values = list(BET_VALUES)
+        for d in ["low", "medium", "high"]:
+            for p in [1, 2, 3, 4]:
+                self.bulk_win_multiplier_vars[d][p].set(WIN_MULTIPLIERS[d][p])
+            self.bulk_mine_config_vars[d].set(TEST_MODE_MINE_CONFIG[d])
+        messagebox.showinfo("Reset", "Parametri avanzati ripristinati ai valori default.")
+
+    # ---- Bulk Excel Export ----
+
+    def export_bulk_excel(self):
+        if not self._bulk_results:
+            messagebox.showerror("Errore", "Nessun risultato da esportare.")
+            return
+        from tkinter import filedialog
+        import datetime
+        default_name = f"bulk_test_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filepath = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
+                                                 initialfile=default_name)
+        if not filepath:
+            return
+        try:
+            success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs = self._bulk_results
+            self._write_excel(filepath, success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs)
+            messagebox.showinfo("Export", f"File salvato: {filepath}")
+        except Exception as e:
+            messagebox.showerror("Errore Export", str(e))
+
+    def _write_excel(self, filepath, success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs):
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.formatting.rule import ColorScaleRule
+        from openpyxl.utils import get_column_letter
+
+        wb = Workbook()
+
+        # --- Sheet 1: Griglia Win Rate ---
+        ws1 = wb.active
+        ws1.title = "Griglia Win Rate"
+
+        # Header row
+        ws1.cell(row=1, column=1, value="maxloss \\ profitto")
+        ws1.cell(row=1, column=1).font = Font(bold=True)
+        for col_i, P in enumerate(profit_thresholds):
+            ws1.cell(row=1, column=col_i + 2, value=P).font = Font(bold=True)
+
+        # Data rows
+        for row_i, L in enumerate(loss_thresholds):
+            ws1.cell(row=row_i + 2, column=1, value=L).font = Font(bold=True)
+            for col_i, P in enumerate(profit_thresholds):
+                count = success_counts.get((L, P), 0)
+                pct = round(count / n_runs * 100, 1) if n_runs > 0 else 0
+                cell = ws1.cell(row=row_i + 2, column=col_i + 2, value=pct)
+                cell.number_format = '0.0'
+                cell.alignment = Alignment(horizontal='center')
+
+        # Conditional formatting: 3-color scale (red 0 -> yellow 50 -> green 100)
+        data_start = "B2"
+        data_end = f"{get_column_letter(len(profit_thresholds) + 1)}{len(loss_thresholds) + 1}"
+        ws1.conditional_formatting.add(
+            f"{data_start}:{data_end}",
+            ColorScaleRule(
+                start_type="num", start_value=0, start_color="F8696B",
+                mid_type="num", mid_value=50, mid_color="FFEB84",
+                end_type="num", end_value=100, end_color="63BE7B",
+            ),
+        )
+
+        # Freeze panes
+        ws1.freeze_panes = "B2"
+
+        # Auto-width for first column
+        ws1.column_dimensions["A"].width = 18
+
+        # --- Sheet 2: Impostazioni ---
+        ws2 = wb.create_sheet("Impostazioni")
+        settings_data = [
+            ("Bankroll iniziale", snapshot["starting_cash"]),
+            ("Target profit", snapshot["target_profit"]),
+            ("Max loss", snapshot["max_loss"]),
+            ("Max rounds", snapshot["max_rounds"]),
+            ("Betting mode", snapshot["mode"]),
+            ("Difficulty", snapshot["difficulty"]),
+            ("Max picks", snapshot["max_picks"]),
+            ("Grinding", "ON" if snapshot["grinding_enabled"] else "OFF"),
+            ("Grinding range", snapshot["grinding_range"]),
+            ("p_random", "ON" if snapshot["p_random"] else "OFF"),
+            ("N runs eseguiti", n_runs),
+        ]
+        for row_i, (label, val) in enumerate(settings_data):
+            ws2.cell(row=row_i + 1, column=1, value=label).font = Font(bold=True)
+            ws2.cell(row=row_i + 1, column=2, value=val)
+
+        # WIN_MULTIPLIERS table
+        start_row = len(settings_data) + 3
+        ws2.cell(row=start_row, column=1, value="WIN_MULTIPLIERS").font = Font(bold=True)
+        for col_i, p in enumerate([1, 2, 3, 4]):
+            ws2.cell(row=start_row, column=col_i + 2, value=f"p={p}").font = Font(bold=True)
+        for row_i, d in enumerate(["low", "medium", "high"]):
+            ws2.cell(row=start_row + 1 + row_i, column=1, value=d).font = Font(bold=True)
+            for col_i, p in enumerate([1, 2, 3, 4]):
+                ws2.cell(row=start_row + 1 + row_i, column=col_i + 2, value=snapshot["win_multipliers"][d][p])
+
+        # MINE_CONFIG
+        mine_row = start_row + 5
+        ws2.cell(row=mine_row, column=1, value="MINE_CONFIG").font = Font(bold=True)
+        for col_i, d in enumerate(["low", "medium", "high"]):
+            ws2.cell(row=mine_row, column=col_i + 2, value=f"{d}: {snapshot['mine_config'][d]}")
+
+        # Betting sequence
+        seq_row = mine_row + 2
+        ws2.cell(row=seq_row, column=1, value="Betting sequence").font = Font(bold=True)
+        ws2.cell(row=seq_row, column=2, value=str(snapshot["betting_sequence"]))
+
+        ws2.column_dimensions["A"].width = 20
+        ws2.column_dimensions["B"].width = 30
+
+        # --- Sheet 3: Sommario ---
+        ws3 = wb.create_sheet("Sommario")
+        ws3.cell(row=1, column=1, value="Totale run").font = Font(bold=True)
+        ws3.cell(row=1, column=2, value=n_runs)
+
+        target_p = int(max(profit_thresholds)) if profit_thresholds else 0
+        max_l = int(max(loss_thresholds)) if loss_thresholds else 0
+
+        # % runs that reached full target (using highest loss threshold = most permissive)
+        target_count = success_counts.get((max_l, target_p), 0) if target_p and max_l else 0
+        ws3.cell(row=2, column=1, value="% raggiunto target (profit >= target)").font = Font(bold=True)
+        ws3.cell(row=2, column=2, value=f"{round(target_count / n_runs * 100, 1)}%" if n_runs > 0 else "0%")
+
+        # % stopped by max_loss (complementary at tightest threshold)
+        min_l = int(min(loss_thresholds)) if loss_thresholds else 0
+        fail_count_tight = n_runs - success_counts.get((min_l, 1), 0) if min_l else n_runs
+        ws3.cell(row=3, column=1, value=f"% fallite a L={min_l} (qualsiasi P)").font = Font(bold=True)
+        ws3.cell(row=3, column=2, value=f"{round(fail_count_tight / n_runs * 100, 1)}%" if n_runs > 0 else "0%")
+
+        # Extremes
+        ws3.cell(row=5, column=1, value="Celle estreme:").font = Font(bold=True)
+        if loss_thresholds and profit_thresholds:
+            corners = [
+                (min(loss_thresholds), min(profit_thresholds)),
+                (min(loss_thresholds), max(profit_thresholds)),
+                (max(loss_thresholds), min(profit_thresholds)),
+                (max(loss_thresholds), max(profit_thresholds)),
+            ]
+            for i, (l, p) in enumerate(corners):
+                cnt = success_counts.get((l, p), 0)
+                pct = round(cnt / n_runs * 100, 1) if n_runs > 0 else 0
+                ws3.cell(row=6 + i, column=1, value=f"L={l}, P={p}")
+                ws3.cell(row=6 + i, column=2, value=f"{pct}%")
+
+        ws3.column_dimensions["A"].width = 35
+        ws3.column_dimensions["B"].width = 15
+
+        wb.save(filepath)
+
     def on_closing(self):
         """Handle application closing"""
         self.mouse_monitoring = False
         self.game_running = False
+        self.bulk_test_stop = True
         self.stop_event.set()
         self.running_event.clear()
         if self.keyboard_listener:
