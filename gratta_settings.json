@@ -1,13 +1,13 @@
 {
-  "starting_cash": 2000.0,
-  "target_win": 2100.0,
-  "max_loss": 100.0,
+  "starting_cash": 1000.0,
+  "target_win": 1007.0,
+  "max_loss": 1000.0,
   "max_rounds": 15000,
   "max_picks": 3,
   "mode": "custom",
   "wait_selected": false,
   "grinding_mode": true,
-  "grinding_range": 0.5,
+  "grinding_range": 4.0,
   "grinding_p_random": true,
   "play_x": 3143,
   "play_y": 1563,
@@ -19,16 +19,11 @@
   "raise_diff_y": 1668,
   "lower_diff_x": 2550,
   "lower_diff_y": 1667,
-  "difficulty": "low",
+  "difficulty": "high",
   "custom_mode": [
     {
       "b": 0.1,
-      "p": 2,
-      "d": "low"
-    },
-    {
-      "b": 20.0,
-      "p": 1,
+      "p": 4,
       "d": "low"
     },
     {
@@ -238,6 +233,7 @@
       3.0,
       5.0,
       9.0,
+      12.0,
       16.0,
       20.0
     ]

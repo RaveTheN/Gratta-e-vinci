@@ -46,7 +46,7 @@ Dopo una vincita, la puntata viene resettata al minimo. Dopo una perdita, la pun
 
 ## Architettura del progetto
 
-Il progetto ha due implementazioni principali:
+Il progetto usa Python e Tkinter:
 
 ### Implementazione Python (principale)
 - **GUI completa** con Tkinter (`gratta_e_vinci_gui.py`)
@@ -62,11 +62,6 @@ Il progetto ha due implementazioni principali:
 - `coordinate_manager.py`: calcolo coordinate e recorder
 - `settings_manager.py`: persistenza JSON e default/schema merge
 
-### Implementazione JavaScript (legacy)
-- Versione precedente con `nut-js` per il controllo del mouse
-- OCR con `tesseract.js` per la lettura del testo su schermo
-- Non più attivamente sviluppata
-
 ---
 
 ## Requisiti di sistema
@@ -81,20 +76,9 @@ Il progetto ha due implementazioni principali:
 | Pacchetto | Versione | Utilizzo |
 |-----------|----------|----------|
 | `pyautogui` | 0.9.54 | Controllo mouse, screenshot, clic automatici |
-| `pytesseract` | 0.3.10 | OCR (opzionale, non usato nella versione corrente) |
-| `opencv-python` | 4.8.1.78 | Elaborazione immagini (opzionale) |
 | `pynput` | 1.8.1 | Monitoraggio tastiera per il tasto ESC |
 | `Pillow` | 10.4.0 | Elaborazione immagini e rilevamento colori |
-| `numpy` | 1.24.3 | Operazioni numeriche (opzionale) |
-
-### Dipendenze JavaScript (legacy)
-
-| Pacchetto | Utilizzo |
-|-----------|----------|
-| `@nut-tree-fork/nut-js` | Controllo mouse nativo |
-| `jimp` | Elaborazione immagini |
-| `screenshot-desktop` | Cattura schermo |
-| `tesseract.js` | OCR per lettura testo |
+| `openpyxl` | ≥3.1.0 | Esportazione dei risultati Bulk Test in Excel |
 
 ---
 
@@ -130,35 +114,32 @@ Il progetto ha due implementazioni principali:
    python gratta_e_vinci_gui.py
    ```
 
-### Installazione dipendenze JavaScript (opzionale)
-Solo se si desidera usare la versione JavaScript legacy:
-```bash
-npm install
-```
-
 ---
+
+### Verifica rapida
+
+Dalla cartella del progetto, verifica GUI, timer, simulazioni ed export Excel senza clic reali e senza salvare le impostazioni:
+
+```cmd
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
 ## Struttura dei file
 
 ```
 Gratta e vinci/
-├── gratta_e_vinci_gui.py       # Applicazione GUI principale (Tkinter, ~1900 righe)
-├── playM.py                    # Motore di automazione Python (logica di gioco completa)
-├── playM.js                    # Implementazione JavaScript (legacy)
-├── autoplay.js                 # Script JavaScript con OCR (legacy)
+├── gratta_e_vinci_gui.py        # Interfaccia Tkinter e orchestrazione
+├── game_engine.py              # Automazione, simulazione e Bulk Test
+├── game_config.py              # Costanti e tipi condivisi
+├── color_detector.py           # Lettura pixel e riconoscimento colori
+├── coordinate_manager.py       # Griglia e registrazione coordinate
+├── settings_manager.py         # Caricamento, validazione e salvataggio JSON
 ├── mouseMonitoring.py          # Utility per monitoraggio posizione mouse
 ├── gratta_settings.json        # File di configurazione (auto-generato/salvato)
 ├── requirements.txt            # Dipendenze Python
-├── package.json                # Dipendenze JavaScript (legacy)
 ├── run_gui.bat                 # Script avvio rapido Windows
 ├── setup.bat                   # Script installazione Windows
-├── eng.traineddata             # Dati OCR per Tesseract (lingua inglese)
-├── test_playM_safe.py          # Test unitari (versione safe)
-├── test_playM_safe_fixed.py    # Test unitari (versione corretta)
-├── test_coordinates.py         # Test delle coordinate
-├── test_setup.py               # Test di configurazione
-├── TESTING_GUIDE.md            # Guida ai test
-├── ROUNDING_FIX.md             # Documentazione fix arrotondamenti
+├── tests/test_smoke.py         # Verifica GUI e simulazione senza clic reali
 └── Diagramma senza titolo.drawio  # Diagramma del flusso
 ```
 
@@ -166,19 +147,14 @@ Gratta e vinci/
 
 #### `gratta_e_vinci_gui.py`
 L'applicazione principale con interfaccia grafica. Contiene:
-- Classe `GrattaEVinciGUI` — gestisce tutta l'interfaccia e la logica di gioco
-- Classe `Point` — rappresenta una posizione (x, y) sullo schermo
-- 5 schede (tab): Impostazioni, Coordinate, Modalità Puntata, Controllo Gioco, Statistiche
+- Classe `GrattaEVinciGUI` — gestisce l'interfaccia e richiama il motore di gioco
+- 8 schede: Settings, Coordinates, Betting Modes, Inizializzazione, Game Control, Statistics, Bulk Test, Pause
 - Sistema di salvataggio/caricamento impostazioni in JSON
 - Monitoraggio mouse in tempo reale
 - Automazione completa del gioco con rilevamento colori
 
-#### `playM.py`  
-Versione standalone (senza GUI) del motore di automazione. Può essere eseguito direttamente da terminale:
-```bash
-python playM.py
-```
-Contiene la stessa logica di gioco della GUI ma con coordinate e impostazioni hardcoded.
+#### `game_engine.py`
+Contiene `GameEngine` per automazione e simulazioni e `TkAutomationAdapter` per le azioni sul gioco. La GUI avvia il motore nei thread di lavoro.
 
 #### `mouseMonitoring.py`
 Utility semplice per visualizzare le coordinate del mouse in tempo reale nel terminale. Utile per calibrare le posizioni delle tessere:
@@ -601,7 +577,6 @@ Il file viene:
 | **Tasto ESC** | Premere il tasto Escape sulla tastiera | Arresto rapido durante il gioco reale (START GAME) |
 | **Pulsante STOP** | Cliccare "STOP GAME" nella GUI | Quando l'interfaccia è accessibile |
 | **Failsafe pyautogui** | Spostare il mouse nell'angolo in alto a sinistra dello schermo | Emergenza — arresto immediato con eccezione |
-| **Ctrl+C** | Nel terminale (solo versione `playM.py`) | Quando si esegue da riga di comando |
 
 ### Condizioni di arresto automatico
 

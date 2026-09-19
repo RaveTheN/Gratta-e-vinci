@@ -5,28 +5,19 @@ Standalone application with configurable settings and mouse coordinate display
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import threading
-import asyncio
 import pyautogui
 import random
 import time
-from pynput import keyboard, mouse
 import json
-import os
-import color_detector
-import coordinate_manager
-import game_engine
-import settings_manager
 from color_detector import ColorDetector
 from coordinate_manager import CoordinateManager, CoordinateRecorder
 from game_config import (
-    Point,
     BETTING_MODES,
     WIN_MULTIPLIERS,
     BET_VALUES,
     TARGET_BLUE,
     TARGET_RED,
     COLOR_TOLERANCE,
-    GRINDING_STEP,
     TEST_MODE_BOARD_SIZE,
     TEST_MODE_MINE_CONFIG,
     format_money,
@@ -45,7 +36,7 @@ class GrattaEVinciGUI:
         self.coordinate_manager = CoordinateManager()
         
         # Initialize variables
-        self.mouse_monitoring = False
+        self.mouse_monitor_after_id = None
         self.game_running = False
         self.escape_pressed = False
         self.stop_event = threading.Event()
@@ -353,208 +344,6 @@ class GrattaEVinciGUI:
         if self.grinding_p_random_var.get():
             return random.randint(1, 3)
         return 3
-
-    def _get_min_bet_for_selected_mode(self):
-        """Return the first bet for the active strategy."""
-        selected_mode_name = self.mode_var.get()
-        if selected_mode_name == "custom" and self.custom_mode:
-            return round(self.custom_mode[0]["b"], 2)
-        if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
-            return round(self.betting_modes[selected_mode_name][0], 2)
-        return 0.1
-
-    def _get_target_bet_for_try(self, tries=None, selected_mode_name=None):
-        """Resolve the bet for a given try index."""
-        if tries is None:
-            tries = self.tries
-        if selected_mode_name is None:
-            selected_mode_name = self.mode_var.get()
-
-        if selected_mode_name == "custom" and self.custom_mode:
-            step_idx = min(tries, len(self.custom_mode) - 1)
-            return round(self.custom_mode[step_idx]["b"], 2)
-        if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
-            mode_array = self.betting_modes[selected_mode_name]
-            step_idx = min(tries, len(mode_array) - 1)
-            return round(mode_array[step_idx], 2)
-        return 0.1
-
-    def _get_round_config_for_strategy(self):
-        """Resolve picks, difficulty and bet for the current round."""
-        selected_mode_name = self.mode_var.get()
-        grinding_enabled = bool(self.grinding_mode_var.get())
-        step_idx = None
-        max_step_idx = None
-
-        if self.grinding_active:
-            max_picks = self.get_grinding_picks()
-            round_difficulty = GRINDING_STEP["d"]
-            target_bet = round(GRINDING_STEP["b"], 2)
-            strategy_source = "grinding"
-        elif selected_mode_name == "custom" and self.custom_mode:
-            step_idx = min(self.tries, len(self.custom_mode) - 1)
-            max_step_idx = len(self.custom_mode) - 1
-            step_data = self.custom_mode[step_idx]
-            max_picks = step_data["p"]
-            round_difficulty = step_data["d"]
-            target_bet = round(step_data["b"], 2)
-            strategy_source = "custom"
-        else:
-            max_picks = self.max_picks_var.get()
-            round_difficulty = self.difficulty_var.get()
-            target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
-            if selected_mode_name in self.betting_modes and self.betting_modes[selected_mode_name]:
-                step_idx = min(self.tries, len(self.betting_modes[selected_mode_name]) - 1)
-                max_step_idx = len(self.betting_modes[selected_mode_name]) - 1
-            strategy_source = "standard"
-
-        return {
-            "selected_mode_name": selected_mode_name,
-            "strategy_source": strategy_source,
-            "grinding_enabled": grinding_enabled,
-            "max_picks": max_picks,
-            "round_difficulty": round_difficulty,
-            "target_bet": target_bet,
-            "step_idx": step_idx,
-            "max_step_idx": max_step_idx,
-            "mine_count": TEST_MODE_MINE_CONFIG[round_difficulty],
-            "multiplier": self.get_win_multiplier(round_difficulty, max_picks),
-        }
-
-    def _simulate_test_board(self, round_difficulty, max_picks):
-        """Simulate a 5x5 board and open tiles without replacement."""
-        mine_count = TEST_MODE_MINE_CONFIG[round_difficulty]
-        board = ["mine"] * mine_count + ["coin"] * (TEST_MODE_BOARD_SIZE - mine_count)
-        random.shuffle(board)
-
-        tile_map = {tile_num: board[tile_num - 1] for tile_num in range(1, TEST_MODE_BOARD_SIZE + 1)}
-        available_tiles = list(tile_map.keys())
-        random.shuffle(available_tiles)
-
-        opened_tiles = []
-        coins_found = 0
-        hit_mine = False
-
-        for tile_num in available_tiles[:max_picks]:
-            outcome = tile_map[tile_num]
-            opened_tiles.append({"tile": tile_num, "outcome": outcome})
-            if outcome == "mine":
-                hit_mine = True
-                break
-            coins_found += 1
-
-        return {
-            "mine_count": mine_count,
-            "opened_tiles": opened_tiles,
-            "coins_found": coins_found,
-            "hit_mine": hit_mine,
-        }
-
-    def _apply_test_win(self, round_config):
-        """Apply the result of a winning simulated round."""
-        win_amount = round(self.bet * round_config["multiplier"], 2)
-        self.current_cash = round(self.current_cash + win_amount, 2)
-        self.total_win = round(self.total_win + win_amount, 2)
-        self.log_message(
-            f"[WIN] 💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)}"
-        )
-
-        if self.current_cash > self.highest_cash:
-            self.highest_cash = round(self.current_cash, 2)
-
-        if self.grinding_active:
-            if self.grinding_saved_balance is not None and self.current_cash >= self.grinding_saved_balance:
-                self.grinding_active = False
-                self.tries = 0
-                self.picks = 0
-                self.bet = self._get_min_bet_for_selected_mode()
-                self.log_message(
-                    f"[GRIND] Completed: balance recovered ({self.format_money(self.current_cash)} >= "
-                    f"{self.format_money(self.grinding_saved_balance)}). Bet reset to minimum."
-                )
-            else:
-                self.bet = round(GRINDING_STEP["b"], 2)
-                target_text = self.format_money(self.grinding_saved_balance or 0)
-                self.log_message(
-                    f"[GRIND] Current balance {self.format_money(self.current_cash)} "
-                    f"(target {target_text}), staying on fixed grinding step."
-                )
-        else:
-            self.tries = 0
-            self.picks = 0
-            self.bet = self._get_min_bet_for_selected_mode()
-            self.log_message(f"[WIN] Bet reset to minimum: {self.format_money(self.bet)}")
-
-    def _apply_test_loss(self, round_config):
-        """Apply the result of a losing simulated round."""
-        step_idx = round_config["step_idx"]
-        max_step_idx = round_config["max_step_idx"]
-        grinding_enabled = round_config["grinding_enabled"]
-
-        if grinding_enabled and not self.grinding_active and step_idx == 0:
-            acceptable_range = self.grinding_range_var.get()
-            self.grinding_saved_balance = round(self.highest_cash - acceptable_range, 2)
-
-        self.tries += 1
-        self.picks = 0
-
-        reached_top_step = (
-            step_idx is not None and
-            max_step_idx is not None and
-            step_idx >= max_step_idx
-        )
-        if (
-            grinding_enabled and
-            not self.grinding_active and
-            reached_top_step and
-            round(self.bet, 2) == round(GRINDING_STEP["b"], 2) and
-            self.grinding_saved_balance is not None
-        ):
-            self.grinding_active = True
-            self.log_message(
-                f"[GRIND] Activated after last-step loss: repeating b={GRINDING_STEP['b']:.1f}, "
-                f"p={self.max_picks_var.get()}, d={GRINDING_STEP['d']} until balance >= "
-                f"{self.format_money(self.grinding_saved_balance)}"
-            )
-
-        if self.grinding_active:
-            self.bet = round(GRINDING_STEP["b"], 2)
-        else:
-            self.bet = self._get_target_bet_for_try(self.tries, round_config["selected_mode_name"])
-
-        if self.bet > self.highest_bet:
-            self.highest_bet = round(self.bet, 2)
-
-        self.log_message(f"[LOSS] Bet updated to: {self.format_money(self.bet)} (try #{self.tries})")
-
-    def _finish_test_mode(self, stop_reason):
-        """Close test mode without marking it as a forced stop."""
-        self.game_running = False
-        self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
-        self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
-        self.root.after(0, self.update_stats_display)
-
-        max_rounds = self.max_rounds_var.get()
-        progress = 100 if max_rounds <= 0 else min(100, (self.rounds / max_rounds) * 100)
-        self.root.after(0, lambda value=progress: self.progress_var.set(value))
-        self.root.after(0, lambda: self.progress_label.config(text=f"TEST MODE ended: {stop_reason}"))
-
-        self.log_message("\n=== TEST MODE RESULTS ===")
-        self.log_message(f"🛑 Stop reason: {stop_reason}")
-        self.log_message(f"💰 Final cash: {self.format_money(self.current_cash)}")
-        self.log_message(f"📈 Highest cash: {self.format_money(self.highest_cash)}")
-        self.log_message(f"📉 Lowest cash: {self.format_money(self.lowest_cash)}")
-        self.log_message(f"🔝 Highest bet: {self.format_money(self.highest_bet)}")
-        self.log_message(f"📉 Total loss: {self.format_money(self.loss)}")
-        self.log_message(f"🏁 Rounds played: {self.rounds}")
-
-        profit_loss = round(self.current_cash - self.starting_cash_var.get(), 2)
-        if profit_loss > 0:
-            self.log_message(f"✅ Net profit: +{self.format_money(profit_loss)}")
-        else:
-            self.log_message(f"❌ Net loss: {self.format_money(profit_loss)}")
-
-        self.log_message("🧪 Strategy simulation completed.")
 
     def _on_mode_var_changed(self, *_):
         """React to mode changes regardless of where they originate."""
@@ -1296,59 +1085,6 @@ class GrattaEVinciGUI:
 
             self.init_tree.insert("", tk.END, values=(i + 1, tipo, dettagli))
 
-    async def execute_init_steps(self):
-        """Execute the user-defined initialization steps before the game loop"""
-        if not self.init_steps:
-            self.log_message("ℹ️ Nessuno step di inizializzazione configurato.")
-            return
-
-        self.log_message(f"🚀 Inizializzazione: {len(self.init_steps)} step in esecuzione...")
-
-        for i, step in enumerate(self.init_steps):
-            if self.escape_pressed:
-                break
-            action = step.get("action")
-            self.log_message(f"  ⚙️  [{i + 1}/{len(self.init_steps)}] {self._step_action_labels.get(action, action)}")
-
-            if action == "set_bet_min":
-                await self.decrease_bet_force()
-
-            elif action == "raise_difficulty":
-                times = step.get("times", 1)
-                rx, ry = self.raise_diff_x_var.get(), self.raise_diff_y_var.get()
-                if rx == 0 and ry == 0:
-                    self.log_message("  ⚠️  Coordinate Alza Difficoltà non configurate!")
-                else:
-                    for _ in range(times):
-                        pyautogui.click(rx, ry)
-                        await asyncio.sleep(self.sleep_init_raise_diff_var.get())
-                    self.log_message(f"  ⬆️  Difficoltà alzata × {times}")
-
-            elif action == "lower_difficulty":
-                times = step.get("times", 1)
-                lx, ly = self.lower_diff_x_var.get(), self.lower_diff_y_var.get()
-                if lx == 0 and ly == 0:
-                    self.log_message("  ⚠️  Coordinate Abbassa Difficoltà non configurate!")
-                else:
-                    for _ in range(times):
-                        pyautogui.click(lx, ly)
-                        await asyncio.sleep(self.sleep_init_lower_diff_var.get())
-                    self.log_message(f"  ⬇️  Difficoltà abbassata × {times}")
-
-            elif action == "wait":
-                seconds = step.get("seconds", 1)
-                self.log_message(f"  ⏳  Attesa {seconds} secondi...")
-                await asyncio.sleep(seconds)
-
-            elif action == "click":
-                x = step.get("x", 0); y = step.get("y", 0)
-                label = step.get("label", f"({x},{y})")
-                pyautogui.click(x, y)
-                self.log_message(f"  🖱️  Click: {label}  ({x}, {y})")
-                await asyncio.sleep(self.sleep_init_click_var.get())
-
-        self.log_message("✅ Inizializzazione completata.")
-
     def create_control_tab(self, parent):
         # Game control buttons
         control_frame = ttk.LabelFrame(parent, text="Game Control", padding=10)
@@ -1494,25 +1230,16 @@ class GrattaEVinciGUI:
 
     def start_mouse_monitoring(self):
         """Start monitoring mouse coordinates"""
-        self.mouse_monitoring = True
-        threading.Thread(target=self.mouse_monitor_thread, daemon=True).start()
-    
-    def mouse_monitor_thread(self):
-        """Thread function for monitoring mouse coordinates"""
-        while self.mouse_monitoring:
-            try:
-                x, y = pyautogui.position()
-                coord_text = f"Mouse Position: ({x}, {y})"
-                
-                # Update both coordinate displays
-                self.root.after(0, lambda: self.coord_label.config(text=coord_text))
-                if hasattr(self, 'settings_coord_label'):
-                    self.root.after(0, lambda: self.settings_coord_label.config(text=coord_text))
-                
-                time.sleep(0.1)
-            except Exception as e:
-                self.log_message(f"[WARN] Mouse monitor stopped due to error: {e}")
-                break
+        self.mouse_monitor_after_id = None
+        try:
+            x, y = pyautogui.position()
+            coord_text = f"Mouse Position: ({x}, {y})"
+            self.coord_label.config(text=coord_text)
+            if hasattr(self, 'settings_coord_label'):
+                self.settings_coord_label.config(text=coord_text)
+            self.mouse_monitor_after_id = self.root.after(100, self.start_mouse_monitoring)
+        except Exception as e:
+            self.log_message(f"[WARN] Mouse monitor stopped due to error: {e}")
     
     def open_betting_mode_editor(self):
         """Open the betting mode editor window"""
@@ -1740,155 +1467,6 @@ class GrattaEVinciGUI:
         pyautogui.click(x, y)
         self.log_message(f"Clicked at ({x}, {y})")
     
-    async def play_or_collect(self):
-        """Play/collect button click"""
-        play_x = self.play_x_var.get()
-        play_y = self.play_y_var.get()
-        await asyncio.sleep(self.sleep_play_or_collect_var.get())
-        pyautogui.click(play_x, play_y)
-        self.log_message("🎮 Clicked play/collect button")
-    
-    async def increase_bet(self):
-        """Increase bet by clicking raise bet button"""
-        raise_x = self.raise_x_var.get()
-        raise_y = self.raise_y_var.get()
-        await asyncio.sleep(self.sleep_increase_bet_var.get())  # Small delay to ensure click is registered (same as playM.py)
-        pyautogui.click(raise_x, raise_y)
-        # Update bet value using the same logic as playM.py
-        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
-        self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)  # Increase bet to next value and round
-    
-    async def decrease_bet(self):
-        await asyncio.sleep(self.sleep_decrease_bet_var.get())
-        """Decrease bet by clicking lower bet button"""
-        lower_x = self.lower_x_var.get()
-        lower_y = self.lower_y_var.get()
-        pyautogui.click(lower_x, lower_y)
-        # Update bet value using the same logic as playM.py
-        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
-        self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)  # Decrease bet to previous value and round
-    
-    async def decrease_bet_force(self):
-        """Force decrease bet to minimum"""
-        lower_x = self.lower_x_var.get()
-        lower_y = self.lower_y_var.get()
-        
-        # Click lower bet button multiple times to ensure minimum (same as playM.py)
-        for i in range(len(self.bet_values)):
-            await asyncio.sleep(self.sleep_decrease_bet_force_var.get())
-            pyautogui.click(lower_x, lower_y)
-        
-        min_bet = self._get_min_bet_for_selected_mode()
-        self.bet = round(min_bet, 2)
-        self.log_message(f"🔽 Bet forced to minimum: {self.format_money(self.bet)}")
-
-    async def set_bet_value(self, target_bet):
-        """Adjust current bet to an exact value by clicking +/- buttons."""
-        target_bet = round(target_bet, 2)
-        if target_bet not in self.bet_values:
-            self.log_message(f"[WARN] Bet {self.format_money(target_bet)} non valida per set_bet_value")
-            return
-        old_bet = self.bet
-        while self.bet < target_bet:
-            await self.increase_bet()
-        while self.bet > target_bet:
-            await self.decrease_bet()
-        if self.bet != old_bet:
-            direction = "📈" if self.bet > old_bet else "📉"
-            self.log_message(f"{direction} Bet: {self.format_money(old_bet)} → {self.format_money(self.bet)}")
-
-    async def decrease_difficulty_force(self, silent=False):
-        """Force difficulty to minimum (low) by clicking lower_difficulty many times"""
-        lx = self.lower_diff_x_var.get()
-        ly = self.lower_diff_y_var.get()
-        if lx == 0 and ly == 0:
-            return  # Coordinate non configurate
-        for _ in range(5):
-            await asyncio.sleep(self.sleep_decrease_diff_force_var.get())
-            pyautogui.click(lx, ly)
-        self.current_difficulty = "low"
-        if not silent:
-            self.log_message("🔽 Difficoltà forzata al minimo (low)")
-
-    async def set_difficulty(self, target_difficulty):
-        """Forza al minimo poi alza alla difficoltà target: low/medium/high"""
-        if self.current_difficulty == target_difficulty:
-            return
-        await self.decrease_difficulty_force(silent=True)
-        rx = self.raise_diff_x_var.get()
-        ry = self.raise_diff_y_var.get()
-        if rx == 0 and ry == 0:
-            return  # Coordinate non configurate
-        clicks = {"low": 0, "medium": 1, "high": 2}.get(target_difficulty, 0)
-        for _ in range(clicks):
-            await asyncio.sleep(self.sleep_set_difficulty_var.get())
-            pyautogui.click(rx, ry)
-        self.current_difficulty = target_difficulty
-        if clicks > 0:
-            self.log_message(f"🎯 Difficoltà impostata a: {target_difficulty}")
-
-    async def click_tile(self, tile_number):
-        """Click on a specific tile"""
-        if tile_number in self.tiles:
-            point = self.tiles[tile_number]
-            await asyncio.sleep(self.sleep_click_tile_var.get())
-            pyautogui.click(point.x, point.y)
-            self.log_message(f"🎯 Clicked tile {tile_number} at ({point.x}, {point.y})")
-        else:
-            self.log_message(f"❌ Tile {tile_number} not found in tiles dictionary")
-    
-    def generate_random_tile(self):
-        """Generate a random tile number from available tiles that hasn't been selected yet"""
-        available_tiles = [1, 2, 3, 4, 5, 6, 11, 16, 21]
-        unused_tiles = [tile for tile in available_tiles if tile not in self.randoms]
-        
-        if not unused_tiles:
-            # If all tiles have been used, reset and start over
-            self.randoms = []
-            unused_tiles = available_tiles
-        
-        tile_number = random.choice(unused_tiles)
-        self.randoms.append(tile_number)
-        self.log_message(f"🎲 Generated random tile: {tile_number}")
-        return tile_number
-    
-    def _read_color_at_point_legacy(self, point):
-        """Read color at a point on screen"""
-        try:
-            # Take screenshot
-            screenshot = pyautogui.screenshot()
-            
-            # Get pixel color at specified point
-            pixel_color = screenshot.getpixel((point.x, point.y))
-            
-            # Convert to RGBA format
-            if len(pixel_color) == 3:  # RGB
-                r, g, b = pixel_color
-                a = 255
-            else:  # RGBA
-                r, g, b, a = pixel_color
-            
-            return {"r": r, "g": g, "b": b, "a": a}
-        except Exception as e:
-            self.log_message(f"❌ Error reading color: {e}")
-            return {"r": 0, "g": 0, "b": 0, "a": 255}
-    
-    def is_color_in_range_blue(self, color, target_color, tolerance=50):
-        """Check if color is in blue range"""
-        return (
-            abs(color["r"] - target_color["r"]) <= tolerance and
-            abs(color["g"] - target_color["g"]) <= tolerance and
-            abs(color["b"] - target_color["b"]) <= tolerance
-        )
-    
-    def is_color_in_range_red(self, color, target_color, tolerance=50):
-        """Check if color is in red range"""
-        return (
-            abs(color["r"] - target_color["r"]) <= tolerance and
-            abs(color["g"] - target_color["g"]) <= tolerance and
-            abs(color["b"] - target_color["b"]) <= tolerance
-        )
-    
     def start_game(self):
         """Start the automated game"""
         if self.game_running:
@@ -1990,513 +1568,6 @@ class GrattaEVinciGUI:
         self.update_stats_display()
         
         threading.Thread(target=self.game_engine.run_test_mode, daemon=True).start()
-    
-    def run_test_mode(self):
-        """Run game simulation for testing"""
-        stop_reason = "Simulation completed"
-        try:
-            max_rounds = self.max_rounds_var.get()
-            target_win = self.target_win_var.get()
-            max_loss = self.max_loss_var.get()
-
-            while True:
-                if not self.game_running:
-                    stop_reason = "Stopped by user"
-                    break
-
-                round_config = self._get_round_config_for_strategy()
-
-                if self.rounds >= max_rounds:
-                    stop_reason = "Reached maximum rounds"
-                    break
-                if self.current_cash >= target_win:
-                    stop_reason = "Reached target win"
-                    break
-                if self.loss >= max_loss:
-                    stop_reason = "Reached maximum loss"
-                    break
-                if self.current_cash < round_config["target_bet"]:
-                    stop_reason = "Insufficient cash"
-                    break
-
-                self.bet = round(round_config["target_bet"], 2)
-                self.picks = 0
-                self.randoms = []
-                if self.bet > self.highest_bet:
-                    self.highest_bet = round(self.bet, 2)
-
-                self.log_message(f"\n=== Test Round {self.rounds + 1} ===")
-                self.log_message(
-                    f"[ROUND] Strategy={round_config['strategy_source']} | "
-                    f"Mode={round_config['selected_mode_name']} | Difficulty={round_config['round_difficulty']} | "
-                    f"Picks target={round_config['max_picks']} | Mines={round_config['mine_count']} | "
-                    f"Bet={self.format_money(self.bet)}"
-                )
-
-                self.current_cash = round(self.current_cash - self.bet, 2)
-                self.log_message(f"[ROUND] Started round - Cash deducted: {self.format_money(self.bet)}")
-                self.log_message(f"💸 New Balance: {self.format_money(self.current_cash)}")
-
-                board_result = self._simulate_test_board(
-                    round_config["round_difficulty"],
-                    round_config["max_picks"],
-                )
-                opened_summary = ", ".join(
-                    f"T{entry['tile']}={'BLUE' if entry['outcome'] == 'coin' else 'RED'}"
-                    for entry in board_result["opened_tiles"]
-                )
-                self.log_message(f"[BOARD] Opened tiles: {opened_summary}")
-
-                self.picks = board_result["coins_found"]
-                if board_result["hit_mine"]:
-                    self.log_message(
-                        f"[LOSS] Hit a RED tile after {board_result['coins_found']} blue(s). "
-                        f"Balance remains {self.format_money(self.current_cash)}"
-                    )
-                    self._apply_test_loss(round_config)
-                else:
-                    self.log_message(
-                        f"[WIN] {round_config['max_picks']} BLUE tiles found. "
-                        f"Multiplier={round_config['multiplier']:.2f}"
-                    )
-                    self._apply_test_win(round_config)
-
-                self.rounds += 1
-                if self.current_cash > self.highest_cash:
-                    self.highest_cash = round(self.current_cash, 2)
-                self.loss = max(0, round(self.highest_cash - self.current_cash, 2))
-
-                progress = 100 if max_rounds <= 0 else min(100, (self.rounds / max_rounds) * 100)
-                self.root.after(0, lambda value=progress: self.progress_var.set(value))
-                self.root.after(
-                    0,
-                    lambda rounds=self.rounds, total=max_rounds: self.progress_label.config(
-                        text=f"Test round {rounds}/{total}"
-                    )
-                )
-                self.root.after(0, self.update_stats_display)
-
-            if stop_reason == "Simulation completed":
-                stop_reason = "Strategy loop completed"
-        except Exception as e:
-            stop_reason = f"Error: {e}"
-            self.log_message(f"❌ TEST MODE error: {e}")
-        finally:
-            self._finish_test_mode(stop_reason)
-    
-    def validate_settings(self):
-        """Validate game settings"""
-        try:
-            starting_cash = self.starting_cash_var.get()
-            if starting_cash <= 0:
-                raise ValueError("Starting cash must be positive")
-            
-            if self.mode_var.get() != "custom":
-                max_picks = self.max_picks_var.get()
-                if max_picks not in [1, 2, 3, 4]:
-                    raise ValueError("Max picks must be between 1 and 4")
-            
-            return True
-        except Exception as e:
-            messagebox.showerror("Invalid Settings", str(e))
-            return False
-    
-    def initialize_game_variables(self):
-        """Initialize game variables from GUI settings"""
-        self.current_cash = round(self.starting_cash_var.get(), 2)
-        self.highest_cash = self.current_cash
-        self.lowest_cash = self.current_cash
-        
-        initial_bet = self._get_min_bet_for_selected_mode()
-        self.bet = round(initial_bet, 2)
-        self.highest_bet = round(initial_bet, 2)
-        self.picks = 0
-        self.tries = 0
-        self.rounds = 0
-        self.loss = 0.0
-        self.total_win = 0.0  # Add this line
-        self.randoms = []
-        self.grinding_active = False
-        self.grinding_saved_balance = None
-        self.current_difficulty = None  # Resettato: difficoltà ignota fino alla prima impostazione
-
-        self.log_message(f"💰 Initialized with cash: {self.format_money(self.current_cash)}")
-        self.log_message(f"🎯 Target win: {self.format_money(self.target_win_var.get())}")
-        self.update_stats_display()
-    
-    def update_tiles_from_gui(self):
-        """Update tiles dictionary from GUI values"""
-        self.tiles = self.coordinate_manager.build_tile_points(self.tile_vars)
-    
-    def start_keyboard_listener(self):
-        """Start keyboard listener for escape key"""
-        def on_key_press(key):
-            if key == keyboard.Key.esc:
-                self.escape_pressed = True
-                self.log_message("🛑 ESCAPE key pressed!")
-                self.root.after(0, self.stop_game)
-                return False
-        
-        self.keyboard_listener = keyboard.Listener(on_press=on_key_press)
-        self.keyboard_listener.start()
-    
-    def run_game_async(self):
-        """Run the game asynchronously"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._main_game_loop_legacy())
-        finally:
-            loop.close()
-    
-    async def _main_game_loop_legacy(self):
-        """Main game loop with actual game automation"""
-        max_rounds = self.max_rounds_var.get()
-        target_win = self.target_win_var.get()
-        max_loss = self.max_loss_var.get()
-        max_picks = self.max_picks_var.get()
-        wait_selected = self.wait_selected_var.get()
-        
-        self.log_message("🎮 Starting REAL game automation...")
-        self.log_message("⚠️ Make sure your game window is positioned correctly!")
-        
-        # Execute user-defined initialization steps
-        await self.execute_init_steps()
-
-        # Set difficulty (standard modes: once at start; custom: handled per round)
-        if self.mode_var.get() != "custom":
-            await self.set_difficulty(self.difficulty_var.get())
-        else:
-            await self.decrease_difficulty_force()
-
-        while self.game_running and not self.escape_pressed:
-            # Check end conditions
-            if self.rounds >= max_rounds:
-                self.log_message("Reached maximum rounds!")
-                break
-            if self.current_cash >= target_win:
-                self.log_message("🎉 Reached target win!")
-                break
-            if self.loss >= max_loss:
-                self.log_message("💸 Reached maximum loss!")
-                break
-            if self.current_cash < self.bet:
-                self.log_message("💀 Insufficient cash!")
-                break
-            
-            # Update progress
-            progress = (self.rounds / max_rounds) * 100
-            self.root.after(0, lambda: self.progress_var.set(progress))
-            self.root.after(0, lambda: self.progress_label.config(text=f"Round {self.rounds + 1}/{max_rounds}"))
-            
-            # Optional wait between rounds
-            if wait_selected and self.rounds > 0:
-                wait_time = random.randint(60, 360)  # 1-6 minutes
-                self.log_message(f"⏰ Waiting {wait_time//60}m {wait_time%60}s before next round...")
-                await asyncio.sleep(wait_time)
-            
-            # Start new round - actual game automation
-            await self._play_real_game_round_legacy()
-            
-            # Update statistics
-            self.root.after(0, self.update_stats_display)
-            
-            # Small delay between rounds
-            await asyncio.sleep(self.sleep_between_rounds_var.get())
-        
-        # Game ended
-        self.root.after(0, self.stop_game)
-        self.log_message("=== GAME ENDED ===")
-        self.log_message(f"Final cash: {self.format_money(self.current_cash)}")
-        self.log_message(f"Highest cash: {self.format_money(self.highest_cash)}")
-        self.log_message(f"Highest bet: {self.format_money(self.highest_bet)}")
-    
-    async def _play_real_game_round_legacy(self):
-        """Play an actual game round with mouse automation"""
-        round_config = self._get_round_config_for_strategy()
-        selected_mode_name = round_config["selected_mode_name"]
-        step_idx = round_config["step_idx"]
-        max_step_idx = round_config["max_step_idx"]
-        grinding_enabled = round_config["grinding_enabled"]
-        max_picks = round_config["max_picks"]
-        round_difficulty = round_config["round_difficulty"]
-        multiplier = round_config["multiplier"]
-
-        # Determine picks and difficulty for this round
-        if self.grinding_active:
-            await self.set_difficulty(round_difficulty)
-            await self.set_bet_value(GRINDING_STEP["b"])
-            if self.bet > self.highest_bet:
-                self.highest_bet = round(self.bet, 2)
-            if self.grinding_saved_balance is not None:
-                self.log_message(
-                    f"[GRIND] Attivo: b={GRINDING_STEP['b']:.1f}, p={max_picks}, d={GRINDING_STEP['d']} "
-                    f"fino a saldo >= {self.format_money(self.grinding_saved_balance)}"
-                )
-        elif selected_mode_name == "custom" and self.custom_mode:
-            await self.set_difficulty(round_difficulty)
-
-        # Start new round - reset picks and prepare for new game
-        self.picks = 0
-        self.randoms = []
-        round_active = True
-
-        self.log_message(f"\n=== Round {self.rounds + 1} ===")
-        self.log_message(f"[ROUND] Current bet: {self.format_money(self.bet)}")
-
-        # Press play to start the round and immediately deduct cash
-        await self.play_or_collect()
-        self.log_message(f"[ROUND] Started round - Cash deducted: {self.format_money(self.bet)}")
-        self.current_cash -= self.bet
-        self.current_cash = round(self.current_cash, 2)
-        self.log_message(f"💸 New Balance: {self.format_money(self.current_cash)}")
-
-        # Keep picking tiles until we get max_picks blues (win) or 1 red (lose)
-        while round_active and self.picks < max_picks:
-            # Check for escape key press during round
-            if self.escape_pressed:
-                self.log_message("[STOP] Game stopped by escape key during round")
-                round_active = False
-                break
-
-            # Generate random tile number
-            tile_number = self.generate_random_tile()
-
-            # Wait for game to process
-            await asyncio.sleep(self.sleep_after_play_var.get())
-
-            # Click on the corresponding tile
-            await self.click_tile(tile_number)
-            await asyncio.sleep(self.sleep_after_tile_click_var.get())
-
-            # Check color of the revealed tile with retry mechanism
-            color_detected = False
-            retry_count = 0
-
-            while not color_detected:
-                if self.escape_pressed:
-                    self.log_message("[STOP] Game stopped by escape key during color detection")
-                    round_active = False
-                    break
-
-                # Get the position of the tile we just clicked
-                clicked_tile_position = self.tiles[tile_number]
-                color = self._read_color_at_point_legacy(clicked_tile_position)
-
-                # Debug: log raw RGB of each tile — utile per calibrare i range di colore
-                # self.log_message(
-                #     f"[COLOR] Tile {tile_number} ({clicked_tile_position.x}, {clicked_tile_position.y}): "
-                #     f"RGB({color['r']}, {color['g']}, {color['b']})"
-                # )
-
-                if self.is_color_in_range_blue(color, self.target_blue):
-                    # BLUE tile found
-                    self.log_message(f"[HIT] Tile {tile_number} is BLUE")
-                    self.picks += 1
-                    color_detected = True
-
-                    # Check if we got max_picks blues (WIN)
-                    if self.picks >= max_picks:
-                        self.log_message(f"[WIN] {max_picks} BLUES! ROUND WON!")
-
-                        # Press collect to get winnings
-                        await self.play_or_collect()
-
-                        # Increase cash by bet times multiplier (we win!)
-                        win_amount = self.bet * multiplier
-                        self.current_cash += win_amount
-                        self.current_cash = round(self.current_cash, 2)
-                        self.total_win += win_amount
-                        self.total_win = round(self.total_win, 2)
-
-                        self.log_message(
-                            f"[WIN] 💰 Won {self.format_money(win_amount)}! New balance: {self.format_money(self.current_cash)} 💰"
-                        )
-
-                        # Update highest cash
-                        if self.current_cash > self.highest_cash:
-                            self.highest_cash = round(self.current_cash, 2)
-
-                        if self.grinding_active:
-                            if self.grinding_saved_balance is not None and self.current_cash >= self.grinding_saved_balance:
-                                # Grinding completed: target balance recovered
-                                self.grinding_active = False
-                                self.tries = 0
-                                self.picks = 0
-
-                                min_bet = self._get_min_bet_for_selected_mode()
-                                await self.set_bet_value(min_bet)
-                                self.log_message(
-                                    f"[GRIND] Completato: saldo recuperato ({self.format_money(self.current_cash)} >= "
-                                    f"{self.format_money(self.grinding_saved_balance)}). Bet tornata al minimo."
-                                )
-                            else:
-                                await self.set_bet_value(GRINDING_STEP["b"])
-                                target_text = self.format_money(self.grinding_saved_balance or 0)
-                                self.log_message(
-                                    f"[GRIND] Saldo attuale {self.format_money(self.current_cash)} "
-                                    f"(target {target_text}), continuo sullo step fisso."
-                                )
-                        else:
-                            # Reset betting strategy after win - back to step 0
-                            self.tries = 0
-                            self.picks = 0
-
-                            min_bet = self._get_min_bet_for_selected_mode()
-                            await self.set_bet_value(min_bet)
-                            self.log_message(f"[WIN] Bet reset to minimum: {self.format_money(self.bet)}")
-
-                        # Reset for next round
-                        round_active = False
-
-                    else:
-                        # Continue picking - we have less than max_picks blues
-                        self.log_message(f"Got {self.picks} blue(s), need {max_picks - self.picks} more...")
-
-                elif self.is_color_in_range_red(color, self.target_red):
-                    # RED tile found - ROUND LOST
-                    self.log_message(f"[LOSS] Tile {tile_number} is RED - ROUND LOST!")
-                    color_detected = True
-                    self.log_message(f"💸 New Balance: {self.format_money(self.current_cash)} 💸")
-
-                    # In grinding mode, save cash when losing at the lowest step.
-                    if grinding_enabled and not self.grinding_active and step_idx == 0:
-                        acceptable_range = self.grinding_range_var.get()
-                        self.grinding_saved_balance = round(self.highest_cash - acceptable_range, 2)
-
-                    # Cash already deducted when round started, just update strategy
-                    self.tries += 1
-
-                    # Reset picks and end round
-                    self.picks = 0
-                    round_active = False
-
-                    # Activate grinding after a loss on the highest step with bet=20.0
-                    reached_top_step = (
-                        step_idx is not None and
-                        max_step_idx is not None and
-                        step_idx >= max_step_idx
-                    )
-                    if (
-                        grinding_enabled and
-                        not self.grinding_active and
-                        reached_top_step and
-                        round(self.bet, 2) == round(GRINDING_STEP["b"], 2) and
-                        self.grinding_saved_balance is not None
-                    ):
-                        self.grinding_active = True
-                        self.log_message(
-                            f"[GRIND] Attivato dopo perdita all'ultimo step: ripeto b={GRINDING_STEP['b']:.1f}, "
-                            f"p={self.max_picks_var.get()}, d={GRINDING_STEP['d']} fino a saldo >= "
-                            f"{self.format_money(self.grinding_saved_balance)}"
-                        )
-
-                    # Update betting strategy after showing round results
-                    await asyncio.sleep(self.sleep_after_result_var.get())
-
-                    if self.grinding_active:
-                        await self.set_difficulty(GRINDING_STEP["d"])
-                        await self.set_bet_value(GRINDING_STEP["b"])
-                    elif selected_mode_name == "custom" and self.custom_mode:
-                        target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
-                        await self.set_bet_value(target_bet)
-                    elif selected_mode_name in self.betting_modes:
-                        target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
-                        await self.set_bet_value(target_bet)
-
-                    if self.bet > self.highest_bet:
-                        self.highest_bet = round(self.bet, 2)
-
-                    self.log_message(f"[LOSS] Bet aggiornato a: {self.format_money(self.bet)} (try #{self.tries})")
-
-                    # Calculate loss
-                    self.loss = max(0, round(self.highest_cash - self.current_cash, 2))
-                    if self.loss >= self.max_loss_var.get():
-                        self.log_message("[STOP] Reached maximum loss!")
-                        self.game_running = False
-                        round_active = False
-                        break
-
-                else:
-                    # Unknown color detected - retry until a known color is found
-                    retry_count += 1
-                    self.log_message(f"[COLOR] Tile {tile_number} - Unknown color (attempt {retry_count})")
-                    self.log_message("   Expected: Blue RGB(1,108,238) or Red RGB(200,13,1)")
-                    self.log_message(f"   Actual: RGB({color['r']}, {color['g']}, {color['b']})")
-                    self.log_message(f"   Tolerance used: {self.color_detector.tolerance}")
-                    self.log_message(f"   Waiting {self.sleep_color_retry_var.get()} second(s) and retrying color detection...")
-                    await asyncio.sleep(self.sleep_color_retry_var.get())
-
-        # Round completed, increment round counter
-        self.rounds += 1
-
-    async def simulate_game_round(self):
-        """Simulate a game round (placeholder)"""
-        self.rounds += 1
-        self.log_message(f"\n=== Round {self.rounds} ===")
-        
-        # This is where the actual game automation would go
-        # For now, just simulate random outcomes
-        await asyncio.sleep(1)  # Simulate game delay
-        
-        if random.random() < 0.6:  # 60% win chance for testing
-            self.log_message("🎉 Round WON!")
-            sim_multiplier = self.get_win_multiplier(self.difficulty_var.get(), self.max_picks_var.get())
-            self.current_cash += self.bet * sim_multiplier
-            self.tries = 0
-            
-            min_bet = self._get_min_bet_for_selected_mode()
-            
-            # Reset bet to minimum after win (same as playM.py logic)
-            while self.bet > min_bet:
-                # Simulate decrease_bet logic without actual clicking
-                current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else 0
-                self.bet = round(self.bet_values[max(current_index - 1, 0)], 2)
-            self.log_message(f"🎯 WIN! Bet reset to minimum: {self.format_money(self.bet)}")
-        else:
-            self.log_message("💸 Round LOST!")
-            self.current_cash -= self.bet
-            self.tries += 1
-            
-            # Get betting strategy from selected mode (same logic as real game mode)
-            selected_mode_name = self.mode_var.get()
-            if selected_mode_name in self.betting_modes:
-                target_bet = self._get_target_bet_for_try(self.tries, selected_mode_name)
-                old_bet = self.bet
-                
-                # Simulate stepping through bet increases (same as real game mode)
-                while self.bet < target_bet:
-                    # Simulate increase_bet logic without actual clicking
-                    current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
-                    self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)
-                
-                self.log_message(f"Bet updated from {selected_mode_name} mode: {self.format_money(old_bet)} → {self.format_money(self.bet)} (try #{self.tries})")
-                
-                # Update highest bet tracking
-                if self.bet > self.highest_bet:
-                    self.highest_bet = round(self.bet, 2)
-            else:
-                # Fallback to simple increase if mode not found
-                bet_multipliers = list(BETTING_MODES.get("normal", [0.1]))
-                if self.tries < len(bet_multipliers):
-                    target_bet = bet_multipliers[self.tries]
-                    old_bet = self.bet
-                    
-                    # Simulate stepping through bet increases
-                    while self.bet < target_bet:
-                        current_index = self.bet_values.index(self.bet) if self.bet in self.bet_values else self.tries
-                        self.bet = round(self.bet_values[min(current_index + 1, len(self.bet_values) - 1)], 2)
-                    
-                    # Update highest bet tracking for fallback case too
-                    if self.bet > self.highest_bet:
-                        self.highest_bet = round(self.bet, 2)
-        
-        # Update highest values
-        if self.current_cash > self.highest_cash:
-            self.highest_cash = self.current_cash
-        # Note: highest_bet already updated above in the betting logic
-        
-        self.loss = max(0, self.highest_cash - self.current_cash)
     
     def update_stats_display(self):
         """Update the statistics display"""
@@ -2797,139 +1868,6 @@ class GrattaEVinciGUI:
             self._on_mode_changed_settings()
             self._on_grinding_toggle()
 
-    def _save_settings_legacy(self):
-        """Save settings to file"""
-        settings = {
-            "starting_cash": self.starting_cash_var.get(),
-            "target_win": self.target_win_var.get(),
-            "max_loss": self.max_loss_var.get(),
-            "max_rounds": self.max_rounds_var.get(),
-            "max_picks": self.max_picks_var.get(),
-            "mode": self.mode_var.get(),
-            "wait_selected": self.wait_selected_var.get(),
-            "grinding_mode": self.grinding_mode_var.get(),
-            "grinding_range": self.grinding_range_var.get(),
-            "grinding_p_random": self.grinding_p_random_var.get(),
-            "play_x": self.play_x_var.get(),
-            "play_y": self.play_y_var.get(),
-            "raise_x": self.raise_x_var.get(),
-            "raise_y": self.raise_y_var.get(),
-            "lower_x": self.lower_x_var.get(),
-            "lower_y": self.lower_y_var.get(),
-            "raise_diff_x": self.raise_diff_x_var.get(),
-            "raise_diff_y": self.raise_diff_y_var.get(),
-            "lower_diff_x": self.lower_diff_x_var.get(),
-            "lower_diff_y": self.lower_diff_y_var.get(),
-            "difficulty": self.difficulty_var.get(),
-            "custom_mode": self.custom_mode,
-            "tiles": {str(num): [x_var.get(), y_var.get()] for num, (x_var, y_var) in self.tile_vars.items()},
-            "betting_modes": self.betting_modes,
-            "init_steps": self.init_steps,
-            "sleep_play_or_collect": self.sleep_play_or_collect_var.get(),
-            "sleep_increase_bet": self.sleep_increase_bet_var.get(),
-            "sleep_decrease_bet": self.sleep_decrease_bet_var.get(),
-            "sleep_decrease_bet_force": self.sleep_decrease_bet_force_var.get(),
-            "sleep_decrease_diff_force": self.sleep_decrease_diff_force_var.get(),
-            "sleep_set_difficulty": self.sleep_set_difficulty_var.get(),
-            "sleep_click_tile": self.sleep_click_tile_var.get(),
-            "sleep_after_play": self.sleep_after_play_var.get(),
-            "sleep_after_tile_click": self.sleep_after_tile_click_var.get(),
-            "sleep_between_rounds": self.sleep_between_rounds_var.get(),
-            "sleep_after_result": self.sleep_after_result_var.get(),
-            "sleep_color_retry": self.sleep_color_retry_var.get(),
-            "sleep_init_raise_diff": self.sleep_init_raise_diff_var.get(),
-            "sleep_init_lower_diff": self.sleep_init_lower_diff_var.get(),
-            "sleep_init_click": self.sleep_init_click_var.get()
-        }
-        
-        try:
-            with open("gratta_settings.json", "w") as f:
-                json.dump(settings, f, indent=2)
-            messagebox.showinfo("Saved", "Settings saved successfully!")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save settings: {e}")
-    
-    def _load_settings_legacy(self):
-        """Load settings from file"""
-        try:
-            if os.path.exists("gratta_settings.json"):
-                with open("gratta_settings.json", "r") as f:
-                    settings = json.load(f)
-                
-                self.starting_cash_var.set(settings.get("starting_cash", 2001.50))
-                self.target_win_var.set(settings.get("target_win", 2100.0))
-                self.max_loss_var.set(settings.get("max_loss", 10.0))
-                self.max_rounds_var.set(settings.get("max_rounds", 100))
-                self.max_picks_var.set(settings.get("max_picks", 3))
-                self.mode_var.set(settings.get("mode", "normal"))
-                self.wait_selected_var.set(settings.get("wait_selected", False))
-                self.grinding_mode_var.set(settings.get("grinding_mode", False))
-                self.grinding_range_var.set(settings.get("grinding_range", 0.5))
-                self.grinding_p_random_var.set(settings.get("grinding_p_random", False))
-                self._on_grinding_toggle()
-
-                self.play_x_var.set(settings.get("play_x", 2196))
-                self.play_y_var.set(settings.get("play_y", 1616))
-                self.raise_x_var.set(settings.get("raise_x", 1900))
-                self.raise_y_var.set(settings.get("raise_y", 1740))
-                self.lower_x_var.set(settings.get("lower_x", 1519))
-                self.lower_y_var.set(settings.get("lower_y", 1740))
-                self.raise_diff_x_var.set(settings.get("raise_diff_x", 0))
-                self.raise_diff_y_var.set(settings.get("raise_diff_y", 0))
-                self.lower_diff_x_var.set(settings.get("lower_diff_x", 0))
-                self.lower_diff_y_var.set(settings.get("lower_diff_y", 0))
-                self.difficulty_var.set(settings.get("difficulty", "low"))
-                self.sleep_play_or_collect_var.set(settings.get("sleep_play_or_collect", 1.0))
-                self.sleep_increase_bet_var.set(settings.get("sleep_increase_bet", 1.0))
-                self.sleep_decrease_bet_var.set(settings.get("sleep_decrease_bet", 1.0))
-                self.sleep_decrease_bet_force_var.set(settings.get("sleep_decrease_bet_force", 0.05))
-                self.sleep_decrease_diff_force_var.set(settings.get("sleep_decrease_diff_force", 0.05))
-                self.sleep_set_difficulty_var.set(settings.get("sleep_set_difficulty", 0.5))
-                self.sleep_click_tile_var.set(settings.get("sleep_click_tile", 1.0))
-                self.sleep_after_play_var.set(settings.get("sleep_after_play", 1.0))
-                self.sleep_after_tile_click_var.set(settings.get("sleep_after_tile_click", 1.0))
-                self.sleep_between_rounds_var.set(settings.get("sleep_between_rounds", 1.0))
-                self.sleep_after_result_var.set(settings.get("sleep_after_result", 2.0))
-                self.sleep_color_retry_var.set(settings.get("sleep_color_retry", 1.0))
-                self.sleep_init_raise_diff_var.set(settings.get("sleep_init_raise_diff", 0.4))
-                self.sleep_init_lower_diff_var.set(settings.get("sleep_init_lower_diff", 0.4))
-                self.sleep_init_click_var.set(settings.get("sleep_init_click", 0.3))
-
-                # Load custom mode
-                saved_custom = settings.get("custom_mode", [])
-                if saved_custom and isinstance(saved_custom, list):
-                    self.custom_mode = saved_custom
-
-                # Load tile positions
-                tiles = settings.get("tiles", {})
-                for tile_str, coords in tiles.items():
-                    tile_num = int(tile_str)
-                    if tile_num in self.tile_vars:
-                        self.tile_vars[tile_num][0].set(coords[0])
-                        self.tile_vars[tile_num][1].set(coords[1])
-                
-                # Load betting modes
-                saved_modes = settings.get("betting_modes", {})
-                if saved_modes:
-                    # Validate and load betting modes
-                    for mode_name, mode_values in saved_modes.items():
-                        if isinstance(mode_values, list) and all(isinstance(v, (int, float)) for v in mode_values):
-                            self.betting_modes[mode_name] = [round(v, 2) for v in mode_values]
-                    self.log_message("Betting modes loaded from settings")
-
-                # Load initialization steps
-                loaded_steps = settings.get("init_steps", None)
-                if loaded_steps is not None and isinstance(loaded_steps, list):
-                    self.init_steps = loaded_steps
-                    if hasattr(self, 'init_tree'):
-                        self.refresh_init_tree()
-
-                self.log_message("Settings loaded successfully!")
-        except Exception as e:
-            self.log_message(f"Failed to load settings: {e}")
-        self._on_mode_changed_settings()
-        self._on_grinding_toggle()
-    
     def reset_settings(self):
         """Reset settings to defaults"""
         if messagebox.askyesno("Reset", "Reset all settings to defaults?"):
@@ -3109,6 +2047,82 @@ class GrattaEVinciGUI:
         self.bulk_stop_button.config(state="disabled")
         self.bulk_export_button.config(state="normal")
         self.bulk_status_label.config(text=f"Completato {runs}/{n} - Pronto per export")
+        self._show_bulk_grid_popup(results)
+
+    def _show_bulk_grid_popup(self, results):
+        """Show a popup with the win-rate grid, matching the Excel output."""
+        success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs = results
+        if not profit_thresholds or not loss_thresholds or n_runs == 0:
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Griglia Win Rate - {n_runs} run")
+
+        n_cols = len(profit_thresholds)
+        n_rows = len(loss_thresholds)
+        cell_w = 50
+        header_w = 70
+        cell_h = 22
+        grid_w = header_w + n_cols * cell_w
+        grid_h = cell_h + n_rows * cell_h
+        win_w = min(max(grid_w + 40, 400), 1200)
+        win_h = min(max(grid_h + 60, 300), 800)
+        win.geometry(f"{win_w}x{win_h}")
+        win.resizable(True, True)
+
+        outer = ttk.Frame(win)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(outer)
+        h_scroll = ttk.Scrollbar(outer, orient="horizontal", command=canvas.xview)
+        v_scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        grid_frame = ttk.Frame(canvas)
+        canvas.create_window((0, 0), window=grid_frame, anchor="nw")
+        grid_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+
+        def pct_to_color(pct):
+            if pct <= 50:
+                r = int(248 + (255 - 248) * pct / 50)
+                g = int(105 + (235 - 105) * pct / 50)
+                b = int(132 - (132 - 132) * pct / 50)
+            else:
+                t = (pct - 50) / 50
+                r = int(255 - (255 - 99) * t)
+                g = int(235 - (235 - 190) * t)
+                b = int(132 - (132 - 123) * t)
+            return f"#{r:02x}{g:02x}{b:02x}"
+
+        # Header corner
+        tk.Label(grid_frame, text="L \\ P", font=("Courier", 9, "bold"), width=8,
+                 relief="ridge", bg="#d0d0d0").grid(row=0, column=0, sticky="nsew")
+
+        # Column headers
+        for col_i, P in enumerate(profit_thresholds):
+            tk.Label(grid_frame, text=str(P), font=("Courier", 9, "bold"), width=6,
+                     relief="ridge", bg="#d0d0d0", anchor="center").grid(row=0, column=col_i + 1, sticky="nsew")
+
+        # Data rows
+        for row_i, L in enumerate(loss_thresholds):
+            tk.Label(grid_frame, text=str(L), font=("Courier", 9, "bold"), width=8,
+                     relief="ridge", bg="#d0d0d0", anchor="center").grid(row=row_i + 1, column=0, sticky="nsew")
+            for col_i, P in enumerate(profit_thresholds):
+                count = success_counts.get((L, P), 0)
+                pct = round(count / n_runs * 100, 1)
+                bg = pct_to_color(pct)
+                fg = "#000000" if pct > 25 else "#ffffff"
+                tk.Label(grid_frame, text=f"{pct:.1f}", font=("Courier", 9), width=6,
+                         relief="ridge", bg=bg, fg=fg, anchor="center").grid(
+                    row=row_i + 1, column=col_i + 1, sticky="nsew")
 
     def _on_bulk_test_failed(self):
         self.bulk_test_running = False
@@ -3129,9 +2143,6 @@ class GrattaEVinciGUI:
         pct = int(i / n * 100) if n > 0 else 0
         self.root.after(0, lambda: self.bulk_progress_var.set(pct))
         self.root.after(0, lambda: self.bulk_progress_label.config(text=f"{i}/{n} ({pct}%)"))
-
-    def _clear_bulk_log(self):
-        self.root.after(0, lambda: self.bulk_log_text.delete("1.0", tk.END))
 
     # ---- Bulk Advanced Param Editors ----
 
@@ -3356,7 +2367,8 @@ class GrattaEVinciGUI:
 
     def on_closing(self):
         """Handle application closing"""
-        self.mouse_monitoring = False
+        if self.mouse_monitor_after_id is not None:
+            self.root.after_cancel(self.mouse_monitor_after_id)
         self.game_running = False
         self.bulk_test_stop = True
         self.stop_event.set()

@@ -6,12 +6,11 @@ import asyncio
 import math
 import random
 import time
-from typing import Any
 
 import pyautogui
 from pynput import keyboard
 
-from game_config import GRINDING_STEP, TEST_MODE_BOARD_SIZE, TEST_MODE_MINE_CONFIG, WIN_MULTIPLIERS
+from game_config import GRINDING_STEP, TEST_MODE_BOARD_SIZE, TEST_MODE_MINE_CONFIG
 
 
 class TkAutomationAdapter:
@@ -635,12 +634,7 @@ class GameEngine:
             self._finish_test_mode(stop_reason)
 
     def run_game_async(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self.main_game_loop())
-        finally:
-            loop.close()
+        asyncio.run(self.main_game_loop())
 
     # ---- Bulk Test ----
 
