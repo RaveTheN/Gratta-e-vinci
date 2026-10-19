@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import math
 from copy import deepcopy
 from typing import Any
 
-from game_config import BETTING_MODES
+from game_config import BETTING_MODES, MAX_PICKS, WIN_MULTIPLIERS
 
 
 class SettingsManager:
@@ -41,6 +42,9 @@ class SettingsManager:
             "lower_diff_y": 0,
             "difficulty": "low",
             "custom_mode": [{"b": 0.1, "p": 2, "d": "low"}],
+            "tile_record_enabled": True,
+            "tile_use_history": False,
+            "tile_reveal_delay": 1.0,
             "tiles": {},
             "betting_modes": {k: list(v) for k, v in BETTING_MODES.items()},
             "init_steps": [{"action": "set_bet_min"}],
@@ -78,6 +82,15 @@ class SettingsManager:
 
     def validate(self, payload: dict[str, Any]) -> list[str]:
         errors: list[str] = []
+        for key in ("tile_record_enabled", "tile_use_history"):
+            if not isinstance(payload.get(key, key == "tile_record_enabled"), bool):
+                errors.append(f"{key} must be boolean")
+        try:
+            delay = float(payload.get("tile_reveal_delay", 1.0))
+            if not math.isfinite(delay) or not 0 <= delay <= 30:
+                errors.append("tile_reveal_delay must be between 0 and 30 seconds")
+        except (ValueError, TypeError):
+            errors.append("tile_reveal_delay must be a number")
         mode = payload.get("mode")
         if mode not in {"normal", "medium", "high", "safe", "custom"}:
             errors.append("mode must be one of: normal, medium, high, safe, custom")
@@ -86,8 +99,16 @@ class SettingsManager:
             errors.append("difficulty must be one of: low, medium, high")
         if float(payload.get("starting_cash", 0)) <= 0:
             errors.append("starting_cash must be > 0")
-        if int(payload.get("max_picks", 0)) not in (1, 2, 3, 4):
-            errors.append("max_picks must be 1,2,3,4")
+        raw_picks = payload.get("max_picks", 0)
+        try:
+            max_picks = int(raw_picks)
+            valid_picks = not isinstance(raw_picks, bool) and float(raw_picks) == max_picks
+        except (TypeError, ValueError, OverflowError):
+            max_picks, valid_picks = 0, False
+        if not valid_picks or not 1 <= max_picks <= MAX_PICKS:
+            errors.append(f"max_picks must be 1..{MAX_PICKS}")
+        elif mode != "custom" and difficulty in WIN_MULTIPLIERS and max_picks not in WIN_MULTIPLIERS[difficulty]:
+            errors.append(f"No multiplier for {difficulty} with {max_picks} picks")
         try:
             tolerance = int(payload.get("color_tolerance", 50))
         except (TypeError, ValueError):
@@ -102,14 +123,18 @@ class SettingsManager:
                     errors.append(f"custom_mode[{idx}] must be an object")
                     continue
                 try:
-                    p = int(step.get("p"))
+                    raw_p = step.get("p")
+                    p = int(raw_p)
+                    valid_p = not isinstance(raw_p, bool) and float(raw_p) == p
                     d = str(step.get("d", "")).lower()
                     _ = round(float(step.get("b")), 2)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     errors.append(f"custom_mode[{idx}] has invalid numeric values")
                     continue
-                if p not in (1, 2, 3, 4):
-                    errors.append(f"custom_mode[{idx}].p must be 1..4")
+                if not valid_p or not 1 <= p <= MAX_PICKS:
+                    errors.append(f"custom_mode[{idx}].p must be 1..{MAX_PICKS}")
+                elif d in WIN_MULTIPLIERS and p not in WIN_MULTIPLIERS[d]:
+                    errors.append(f"custom_mode[{idx}]: no multiplier for {d} with {p} picks")
                 if d not in ("low", "medium", "high"):
                     errors.append(f"custom_mode[{idx}].d must be low/medium/high")
         return errors
@@ -124,6 +149,9 @@ class SettingsManager:
 
     def save_settings(self, path: str, payload: dict[str, Any]) -> None:
         normalized = self.merge_with_defaults(payload)
+        errors = self.validate(normalized)
+        if errors:
+            raise ValueError("; ".join(errors))
         with open(path, "w", encoding="utf-8") as f:
             json.dump(normalized, f, indent=2)
 

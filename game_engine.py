@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import random
 import time
+import uuid
+import math
 
 import pyautogui
 from pynput import keyboard
@@ -84,6 +85,9 @@ class TkAutomationAdapter:
             self.app.log_message(f"❌ Error reading color: {e}")
             return {"r": 0, "g": 0, "b": 0, "a": 255}
 
+    def read_board(self, points):
+        return self.color_detector.read_board(points)
+
     def is_blue(self, color):
         return self.color_detector.is_color_in_range_blue(color, self.app.target_blue)
 
@@ -101,6 +105,7 @@ class GameEngine:
     def __init__(self, app, adapter: TkAutomationAdapter):
         self.app = app
         self.adapter = adapter
+        self.tile_session_id = uuid.uuid4().hex
 
     def _is_running(self):
         if hasattr(self.app, "running_event"):
@@ -177,13 +182,21 @@ class GameEngine:
         starting_cash = self.app.starting_cash_var.get()
         if starting_cash <= 0:
             raise ValueError("Starting cash must be positive")
-        if self.app.mode_var.get() != "custom":
-            max_picks = self.app.max_picks_var.get()
-            if max_picks not in [1, 2, 3, 4]:
-                raise ValueError("Max picks must be between 1 and 4")
+        if self.app.mode_var.get() == "custom":
+            if not self.app.custom_mode:
+                raise ValueError("La sequenza custom deve contenere almeno un passo")
+            selections = [(step["d"], step["p"]) for step in self.app.custom_mode]
+        else:
+            selections = [(self.app.difficulty_var.get(), self.app.max_picks_var.get())]
+        for difficulty, picks in selections:
+            self.app.get_win_multiplier(difficulty, picks)
+        reveal_delay = self.app.tile_reveal_delay_var.get()
+        if not math.isfinite(reveal_delay) or not 0 <= reveal_delay <= 30:
+            raise ValueError("Attesa scoperta celle: inserire secondi tra 0 e 30")
         return True
 
     def initialize_game_variables(self):
+        self.tile_session_id = uuid.uuid4().hex
         self.app.current_cash = round(self.app.starting_cash_var.get(), 2)
         self.app.highest_cash = self.app.current_cash
         self.app.lowest_cash = self.app.current_cash
@@ -241,15 +254,52 @@ class GameEngine:
             self.app.log_message(f"{direction} Bet: {self.app.format_money(old_bet)} → {self.app.format_money(self.app.bet)}")
 
     def generate_random_tile(self):
-        available_tiles = [1, 2, 3, 4, 5, 6, 11, 16, 21]
-        unused_tiles = [tile for tile in available_tiles if tile not in self.app.randoms]
+        unused_tiles = [tile for tile in getattr(self, "round_tile_order", range(1, 26))
+                        if tile not in self.app.randoms]
         if not unused_tiles:
-            self.app.randoms = []
-            unused_tiles = available_tiles
-        tile_number = random.choice(unused_tiles)
+            raise ValueError("Tutte le celle della partita sono già state selezionate")
+        tile_number = unused_tiles[0] if hasattr(self, "round_tile_order") else random.choice(unused_tiles)
         self.app.randoms.append(tile_number)
-        self.app.log_message(f"🎲 Generated random tile: {tile_number}")
+        self.app.log_message(f"🎲 Cella selezionata: {tile_number}")
         return tile_number
+
+    def _prepare_tile_selection(self, round_config):
+        self.round_tile_order = random.sample(range(1, 26), 25)
+        self.tile_comparison = None
+        if not self.app.tile_record_enabled_var.get():
+            return
+        difficulty = round_config["round_difficulty"]
+        historical = self.app.tile_history.order(difficulty)
+        if self.app.tile_history.stats(difficulty)["ready"]:
+            self.tile_comparison = {"picks": round_config["max_picks"],
+                                    "history_order": historical,
+                                    "random_order": list(self.round_tile_order)}
+        if self.app.tile_use_history_var.get():
+            self.round_tile_order = historical
+
+    async def _record_finished_board(self, round_config, outcome):
+        if not self.app.tile_record_enabled_var.get():
+            return
+        try:
+            delay = self.app.tile_reveal_delay_var.get()
+            colors = [None] * 25
+            for _ in range(3):
+                await asyncio.sleep(delay)
+                if self._is_stop_requested():
+                    return
+                colors = self.adapter.read_board(self.app.tiles)
+                if all(c is not None for c in colors) and colors.count("red") == round_config["mine_count"]:
+                    break
+            self.app.tile_history.record(
+                round_config["round_difficulty"], colors, outcome=outcome,
+                prospective=self.tile_comparison,
+                round_id=f"{self.tile_session_id}:{self.app.rounds + 1}",
+                expected_mines=round_config["mine_count"])
+            usable = all(c is not None for c in colors) and colors.count("red") == round_config["mine_count"]
+            message = "25 celle registrate" if usable else "lettura parziale/non valida: salvata, esclusa dalle frequenze"
+            self.app.log_message(f"[CELLE] {message} ({round_config['round_difficulty']})")
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            self.app.log_message(f"[CELLE] Registrazione non riuscita: {error}")
 
     async def execute_init_steps(self):
         if not self.app.init_steps:
@@ -318,6 +368,7 @@ class GameEngine:
 
     async def play_real_game_round(self):
         round_config = self._get_round_config_for_strategy()
+        self._prepare_tile_selection(round_config)
         selected_mode_name = round_config["selected_mode_name"]
         step_idx = round_config["step_idx"]
         max_step_idx = round_config["max_step_idx"]
@@ -369,6 +420,7 @@ class GameEngine:
                         self.app.total_win = round(self.app.total_win + win_amount, 2)
                         if self.app.current_cash > self.app.highest_cash:
                             self.app.highest_cash = round(self.app.current_cash, 2)
+                        await self._record_finished_board(round_config, "win")
                         if self.app.grinding_active:
                             if self.app.grinding_saved_balance is not None and self.app.current_cash >= self.app.grinding_saved_balance:
                                 self.app.grinding_active = False
@@ -385,6 +437,7 @@ class GameEngine:
                 elif self.adapter.is_red(color):
                     self.app.log_message(f"[LOSS] Tile {tile_number} is RED - ROUND LOST!")
                     color_detected = True
+                    await self._record_finished_board(round_config, "loss")
                     if grinding_enabled and not self.app.grinding_active and step_idx == 0:
                         acceptable_range = self.app.grinding_range_var.get()
                         self.app.grinding_saved_balance = round(self.app.highest_cash - acceptable_range, 2)
@@ -639,7 +692,7 @@ class GameEngine:
     # ---- Bulk Test ----
 
     def _build_bulk_snapshot(self):
-        """Capture all settings needed for bulk simulation from the GUI (called once)."""
+        """Capture independent settings on the GUI thread before starting a worker."""
         mode = self.app.mode_var.get()
         if mode == "custom" and self.app.custom_mode:
             betting_sequence = [step["b"] for step in self.app.custom_mode]
@@ -649,7 +702,7 @@ class GameEngine:
             betting_sequence = [0.1]
 
         win_multipliers = {
-            d: {p: self.app.bulk_win_multiplier_vars[d][p].get() for p in [1, 2, 3, 4]}
+            d: {p: var.get() for p, var in self.app.bulk_win_multiplier_vars[d].items()}
             for d in ["low", "medium", "high"]
         }
         mine_config = {
@@ -664,6 +717,9 @@ class GameEngine:
             "max_rounds": self.app.max_rounds_var.get(),
             "mode": mode,
             "betting_sequence": betting_sequence,
+            "betting_modes": {name: list(values) for name, values in self.app.bulk_betting_modes.items()},
+            "bet_values": list(self.app.bulk_bet_values),
+            "custom_mode": [dict(step) for step in self.app.custom_mode],
             "max_picks": self.app.max_picks_var.get(),
             "difficulty": self.app.difficulty_var.get(),
             "grinding_enabled": bool(self.app.grinding_mode_var.get()),
@@ -674,175 +730,8 @@ class GameEngine:
         }
 
     def run_bulk_test(self, n_runs, progress_cb, log_cb, stop_check, show_logs):
-        """Run n_runs independent simulations and return aggregated results."""
-        snapshot = self._build_bulk_snapshot()
-        target_profit = snapshot["target_profit"]
-        max_loss = snapshot["max_loss"]
+        """Convenience entry point; capture settings on the GUI thread before use."""
+        from bulk_simulation import build_configurations, run_bulk_batch
 
-        # Build threshold ranges
-        if target_profit <= 100:
-            profit_step = 1
-        else:
-            profit_step = math.ceil(target_profit / 100)
-        profit_thresholds = list(range(profit_step, int(math.ceil(target_profit / profit_step) * profit_step) + 1, profit_step))
-        if not profit_thresholds or profit_thresholds[-1] < target_profit:
-            profit_thresholds.append(int(math.ceil(target_profit)))
-
-        loss_step = 5
-        max_loss_ceil = max(loss_step, math.ceil(max_loss / loss_step) * loss_step)
-        loss_thresholds = list(range(loss_step, max_loss_ceil + 1, loss_step))
-
-        success_counts = {(L, P): 0 for L in loss_thresholds for P in profit_thresholds}
-
-        runs_completed = 0
-        for i in range(n_runs):
-            if stop_check():
-                break
-            profit_reached = self._run_single_bulk_game(snapshot)
-
-            for P, max_dd in profit_reached.items():
-                for L in loss_thresholds:
-                    if max_dd <= L:
-                        success_counts[(L, P)] += 1
-
-            runs_completed = i + 1
-            progress_cb(runs_completed, n_runs)
-
-            if show_logs():
-                reached_target = any(p >= target_profit for p in profit_reached)
-                max_dd_final = max(profit_reached.values()) if profit_reached else 0
-                status = "TARGET" if reached_target else "STOP"
-                log_cb(f"[Run {runs_completed}] {status} | Profits reached: {len(profit_reached)} | Max DD: {max_dd_final:.2f}")
-
-            if show_logs() and runs_completed % 2 == 0:
-                log_cb("__CLEAR__")
-
-        return (success_counts, profit_thresholds, loss_thresholds, snapshot, runs_completed)
-
-    def _simulate_bulk_board(self, mine_count, max_picks):
-        """Pure board simulation with explicit mine_count (no global access)."""
-        board = ["mine"] * mine_count + ["coin"] * (TEST_MODE_BOARD_SIZE - mine_count)
-        random.shuffle(board)
-        coins_found = 0
-        hit_mine = False
-        indices = list(range(TEST_MODE_BOARD_SIZE))
-        random.shuffle(indices)
-        for idx in indices[:max_picks]:
-            if board[idx] == "mine":
-                hit_mine = True
-                break
-            coins_found += 1
-        return coins_found, hit_mine
-
-    def _run_single_bulk_game(self, snap):
-        """Run one full simulation. Returns {profit_threshold: max_dd_when_first_reached}."""
-        cash = snap["starting_cash"]
-        starting_cash = cash
-        target_profit = snap["target_profit"]
-        max_loss = snap["max_loss"]
-        max_rounds = snap["max_rounds"]
-        sequence = snap["betting_sequence"]
-        max_picks = snap["max_picks"]
-        difficulty = snap["difficulty"]
-        grinding_enabled = snap["grinding_enabled"]
-        grinding_range = snap["grinding_range"]
-        p_random = snap["p_random"]
-        win_mults = snap["win_multipliers"]
-        mine_cfg = snap["mine_config"]
-
-        highest = cash
-        max_dd_so_far = 0.0
-        tries = 0
-        rounds = 0
-        max_step = len(sequence) - 1
-        grinding_active = False
-        grinding_saved_balance = None
-        profit_reached = {}
-
-        while rounds < max_rounds:
-            # Determine current round params
-            if grinding_active:
-                rd = "high"
-                mp = self._bulk_grinding_picks(cash, grinding_saved_balance, p_random, win_mults)
-                bet = GRINDING_STEP["b"]
-            else:
-                rd = difficulty
-                mp = max_picks
-                bet = sequence[min(tries, max_step)]
-
-            if cash < bet:
-                break
-
-            cash = round(cash - bet, 2)
-
-            mine_count = mine_cfg[rd]
-            multiplier = win_mults[rd][mp]
-            coins_found, hit_mine = self._simulate_bulk_board(mine_count, mp)
-
-            if hit_mine:
-                # Loss
-                step_idx = min(tries, max_step)
-                if grinding_enabled and not grinding_active and step_idx == 0:
-                    grinding_saved_balance = round(highest - grinding_range, 2)
-                tries += 1
-                reached_top = step_idx >= max_step
-                if grinding_enabled and not grinding_active and reached_top and round(bet, 2) == round(GRINDING_STEP["b"], 2) and grinding_saved_balance is not None:
-                    grinding_active = True
-                if grinding_active:
-                    pass  # bet will be set next iteration
-                # no bet update needed here, it's recalculated at loop top
-            else:
-                # Win
-                win_amount = round(bet * multiplier, 2)
-                cash = round(cash + win_amount, 2)
-                if cash > highest:
-                    highest = round(cash, 2)
-                if grinding_active:
-                    if grinding_saved_balance is not None and cash >= grinding_saved_balance:
-                        grinding_active = False
-                        tries = 0
-                else:
-                    tries = 0
-
-            if cash > highest:
-                highest = round(cash, 2)
-            current_dd = round(highest - cash, 2)
-            if current_dd > max_dd_so_far:
-                max_dd_so_far = current_dd
-
-            # Check profit thresholds
-            profit = round(cash - starting_cash, 2)
-            if profit > 0:
-                # Check each integer threshold up to target
-                step = 1 if target_profit <= 100 else math.ceil(target_profit / 100)
-                p_val = step
-                while p_val <= profit and p_val <= target_profit:
-                    if p_val not in profit_reached:
-                        profit_reached[p_val] = max_dd_so_far
-                    p_val += step
-                # Also check the exact target
-                if profit >= target_profit and target_profit not in profit_reached:
-                    profit_reached[int(math.ceil(target_profit))] = max_dd_so_far
-
-            rounds += 1
-
-            # Stop conditions
-            if profit >= target_profit:
-                break
-            if max_dd_so_far >= max_loss:
-                break
-
-        return profit_reached
-
-    @staticmethod
-    def _bulk_grinding_picks(cash, grinding_saved_balance, p_random, win_mults):
-        """Determine picks during grinding (pure, no self.app access)."""
-        b = GRINDING_STEP["b"]
-        target = grinding_saved_balance if grinding_saved_balance is not None else 0
-        for p in [1, 2, 3]:
-            projected = cash + (b * win_mults["high"][p])
-            if projected >= target:
-                return p
-        if p_random:
-            return random.randint(1, 3)
-        return 3
+        settings = build_configurations(self._build_bulk_snapshot())
+        return run_bulk_batch(settings, n_runs, None, progress_cb, log_cb, stop_check, show_logs)

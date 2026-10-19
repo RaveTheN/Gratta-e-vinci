@@ -21,6 +21,27 @@ class ColorDetector:
         self.target_red = dict(target_red or TARGET_RED)
         self.tolerance = tolerance
 
+    def read_board(self, points: dict[int, Any]) -> list[str | None]:
+        """Read the entire revealed board from one frame, avoiding mixed animations."""
+        if set(points) != set(range(1, 26)):
+            raise ValueError("Servono le coordinate di tutte le 25 celle")
+        coordinates = [(int(points[tile].x), int(points[tile].y)) for tile in range(1, 26)]
+        if len(set(coordinates)) != 25:
+            raise ValueError("Le 25 celle devono avere coordinate distinte")
+        width, height = pyautogui.size()
+        if any(x < 0 or y < 0 or x >= width or y >= height for x, y in coordinates):
+            raise ValueError("Una o più celle sono fuori dallo schermo")
+        left, top = min(x for x, _ in coordinates), min(y for _, y in coordinates)
+        right, bottom = max(x for x, _ in coordinates) + 1, max(y for _, y in coordinates) + 1
+        screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
+        colors = []
+        for x, y in coordinates:
+            pixel = screenshot.getpixel((x - left, y - top))
+            color = dict(zip(("r", "g", "b"), pixel[:3]))
+            blue, red = self.is_color_in_range_blue(color), self.is_color_in_range_red(color)
+            colors.append("blue" if blue and not red else "red" if red and not blue else None)
+        return colors
+
     def read_color_at_point(self, point: Any) -> dict[str, int]:
         x = int(point.x)
         y = int(point.y)

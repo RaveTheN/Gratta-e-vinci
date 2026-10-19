@@ -9,11 +9,19 @@ import pyautogui
 import random
 import time
 import json
+import queue
+from datetime import datetime
+from pathlib import Path
+from bulk_simulation import run_bulk_batch, wilson_interval
+from bulk_export import save_bulk_json, write_bulk_excel, write_bulk_csv, STOP_LABELS
+from bulk_export import load_bulk_json
+from bulk_ui import LaptopPanel, add_laptop_results
 from color_detector import ColorDetector
 from coordinate_manager import CoordinateManager, CoordinateRecorder
 from game_config import (
     BETTING_MODES,
     WIN_MULTIPLIERS,
+    MAX_PICKS,
     BET_VALUES,
     TARGET_BLUE,
     TARGET_RED,
@@ -24,6 +32,7 @@ from game_config import (
 )
 from game_engine import GameEngine, TkAutomationAdapter
 from settings_manager import SettingsManager
+from tile_history import TileHistory
 
 class GrattaEVinciGUI:
     def __init__(self, root):
@@ -32,6 +41,15 @@ class GrattaEVinciGUI:
         self.root.geometry("900x1000")
         self.root.resizable(True, True)
         self.settings_path = "gratta_settings.json"
+        self.tile_history_error = None
+        try:
+            self.tile_history = TileHistory(Path(self.settings_path).resolve().with_name("tile_history.jsonl"))
+        except OSError as error:
+            self.tile_history = None
+            self.tile_history_error = str(error)
+        self.tile_record_enabled_var = tk.BooleanVar(value=self.tile_history is not None)
+        self.tile_use_history_var = tk.BooleanVar(value=False)
+        self.tile_reveal_delay_var = tk.DoubleVar(value=1.0)
         self.settings_manager = SettingsManager()
         self.coordinate_manager = CoordinateManager()
         
@@ -101,16 +119,22 @@ class GrattaEVinciGUI:
         
         # Bulk Test variables
         self.bulk_n_runs_var = tk.IntVar(value=100)
-        self.bulk_show_logs_var = tk.BooleanVar(value=True)
+        self.bulk_show_logs_var = tk.BooleanVar(value=False)
+        self.bulk_output_dir_var = tk.StringVar(value=str(Path(__file__).resolve().parent / "bulk_results"))
         self.bulk_test_running = False
-        self.bulk_test_stop = False
+        self.bulk_stop_event = threading.Event()
+        self.bulk_logs_event = threading.Event()
+        self.bulk_events = queue.Queue()
+        self.bulk_poll_after_id = None
+        self.bulk_worker_thread = None
+        self.closing = False
         self._bulk_results = None
 
         # Bulk advanced params (local overrides, initialized from game_config defaults)
         self.bulk_betting_modes = {k: list(v) for k, v in BETTING_MODES.items()}
         self.bulk_bet_values = list(BET_VALUES)
         self.bulk_win_multiplier_vars = {
-            d: {p: tk.DoubleVar(value=WIN_MULTIPLIERS[d][p]) for p in [1, 2, 3, 4]}
+            d: {p: tk.DoubleVar(value=value) for p, value in WIN_MULTIPLIERS[d].items()}
             for d in ["low", "medium", "high"]
         }
         self.bulk_mine_config_vars = {
@@ -143,6 +167,10 @@ class GrattaEVinciGUI:
         notebook.add(settings_frame, text="Settings")
         self.create_settings_tab(settings_frame)
         
+        bulk_frame = ttk.Frame(notebook)
+        notebook.add(bulk_frame, text="Bulk Test")
+        self.create_bulk_test_section(bulk_frame)
+
         # Coordinates Tab
         coordinates_frame = ttk.Frame(notebook)
         notebook.add(coordinates_frame, text="Coordinates")
@@ -168,17 +196,28 @@ class GrattaEVinciGUI:
         notebook.add(stats_frame, text="Statistics")
         self.create_stats_tab(stats_frame)
 
-        # Bulk Test Tab
-        bulk_frame = ttk.Frame(notebook)
-        notebook.add(bulk_frame, text="Bulk Test")
-        self.create_bulk_test_tab(bulk_frame)
-
         # Pauses Tab
         pauses_frame = ttk.Frame(notebook)
         notebook.add(pauses_frame, text="Pause")
         self.create_pauses_tab(pauses_frame)
     
     def create_settings_tab(self, parent):
+        canvas = tk.Canvas(parent, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(canvas_window, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        def _on_mousewheel(event):
+            if canvas.winfo_ismapped() and not isinstance(event.widget, tk.Text):
+                canvas.yview_scroll(int(-event.delta / 120), "units")
+        self.root.bind("<MouseWheel>", _on_mousewheel, add="+")
+        parent = scroll_frame
+
         # Mouse coordinates display in settings
         coord_frame = ttk.LabelFrame(parent, text="Mouse Coordinates", padding=10)
         coord_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -211,9 +250,9 @@ class GrattaEVinciGUI:
         ttk.Entry(game_frame, textvariable=self.max_rounds_var, width=15).grid(row=1, column=3, padx=5, pady=2)
         
         # Max Picks
-        ttk.Label(game_frame, text="Max Picks (1-4):").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(game_frame, text="Caselle (5-8 solo medium):").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.max_picks_var = tk.IntVar(value=3)
-        self.max_picks_spinbox = ttk.Spinbox(game_frame, from_=1, to=4, textvariable=self.max_picks_var, width=13)
+        self.max_picks_spinbox = ttk.Spinbox(game_frame, from_=1, to=MAX_PICKS, textvariable=self.max_picks_var, width=13)
         self.max_picks_spinbox.grid(row=2, column=1, padx=5, pady=2)
 
         # Betting Mode
@@ -306,6 +345,7 @@ class GrattaEVinciGUI:
         ttk.Button(button_frame, text="Save Settings", command=self.on_save_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Load Settings", command=self.on_load_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Reset to Defaults", command=self.reset_settings).pack(side=tk.LEFT, padx=5)
+
     
     def _on_mode_changed_settings(self):
         """Disable max_picks and difficulty widgets when custom mode is selected."""
@@ -1097,6 +1137,19 @@ class GrattaEVinciGUI:
         self.stop_button.pack(side=tk.LEFT, padx=10, pady=5)
         
         ttk.Button(control_frame, text="🧪 TEST MODE", command=self.start_test_mode).pack(side=tk.LEFT, padx=10, pady=5)
+
+        tile_frame = ttk.LabelFrame(parent, text="Analisi delle 25 celle", padding=8)
+        tile_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.tile_record_check = ttk.Checkbutton(tile_frame, text="Registra le 25 celle dopo vittorie e sconfitte",
+                                                variable=self.tile_record_enabled_var, command=self._update_tile_controls)
+        self.tile_record_check.pack(anchor="w")
+        self.tile_history_check = ttk.Checkbutton(tile_frame, text="Scegli le celle usando lo storico (sperimentale)",
+                                                 variable=self.tile_use_history_var)
+        self.tile_history_check.pack(anchor="w")
+        ttk.Label(tile_frame, text="La scelta resta casuale fino a 100 tavole complete per difficoltà. "
+                  "Lo storico descrive il passato: non garantisce meno celle rosse nella prossima partita.",
+                  wraplength=780).pack(anchor="w", pady=3)
+        ttk.Button(tile_frame, text="Mostra analisi celle", command=self.show_tile_analysis).pack(anchor="w", pady=3)
         
         # Log control buttons
         log_control_frame = ttk.LabelFrame(parent, text="Log Control", padding=10)
@@ -1111,6 +1164,76 @@ class GrattaEVinciGUI:
         
         self.status_text = scrolledtext.ScrolledText(status_frame, height=20, width=80)
         self.status_text.pack(fill=tk.BOTH, expand=True)
+
+    def _update_tile_controls(self):
+        if self.tile_history is None:
+            self.tile_record_enabled_var.set(False)
+            self.tile_record_check.config(state="disabled")
+        enabled = self.tile_record_enabled_var.get()
+        if not enabled:
+            self.tile_use_history_var.set(False)
+        self.tile_history_check.config(state="normal" if enabled else "disabled")
+
+    def show_tile_analysis(self):
+        if self.tile_history is None:
+            messagebox.showerror("Analisi celle", f"Archivio non leggibile: {self.tile_history_error}")
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Analisi delle celle — partite reali")
+        win.geometry("730x580")
+        win.minsize(730, 560)
+        canvas = tk.Canvas(win, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(fill="both", expand=True)
+        content = ttk.Frame(canvas)
+        window = canvas.create_window(0, 0, window=content, anchor="nw")
+        content.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        win.bind("<MouseWheel>", lambda event: canvas.yview_scroll(int(-event.delta/120), "units"))
+        difficulty = ttk.Combobox(content, values=["low", "medium", "high"], state="readonly", width=14)
+        difficulty.pack(anchor="w", padx=10, pady=8)
+        difficulty.set(self.difficulty_var.get())
+        description = ttk.Label(content, wraplength=680, justify="left")
+        description.pack(anchor="w", padx=10, pady=5)
+        grid = ttk.Frame(content)
+        grid.pack(fill="x", padx=10, pady=5)
+        cells = []
+        for tile in range(25):
+            cell = tk.Label(grid, relief="ridge", padx=6, pady=8)
+            cell.grid(row=tile//5, column=tile%5, sticky="nsew")
+            grid.columnconfigure(tile%5, weight=1)
+            cells.append(cell)
+        comparison = ttk.Label(content, wraplength=680, justify="left")
+        comparison.pack(anchor="w", padx=10, pady=8)
+        ttk.Label(content, text="Si usano soltanto tavole con tutte le celle riconosciute e un numero di rosse coerente con la difficoltà. "
+                  "Le letture parziali restano nel file ma non influenzano la scelta.\n"
+                  "Queste percentuali sono frequenze passate. Su tavole casuali indipendenti non prevedono la prossima cella.",
+                  wraplength=680).pack(anchor="w", padx=10, pady=5)
+        ttk.Label(content, text=f"Dati: {self.tile_history.path}", wraplength=680).pack(anchor="w", padx=10, pady=5)
+
+        def refresh(_=None):
+            stats = self.tile_history.stats(difficulty.get())
+            status = "Scelta da storico disponibile (sperimentale)" if stats["ready"] else "Raccolta iniziale: scelta ancora casuale"
+            description.config(text=f"Tavole utilizzabili: {stats['complete_boards']} | Letture parziali/non valide: {stats['partial_boards']}\n{status}")
+            for label, data in zip(cells, stats["tiles"]):
+                frequency = "—" if data["red_rate"] is None else f"{data['red_rate']*100:.1f}%"
+                label.config(text=f"Cella {data['tile']}\nRosse: {frequency}\n{data['red_count']}/{data['observations']}", bg="#f2f5f7")
+            evaluation = stats["evaluation"]
+            if evaluation["pairs"]:
+                n = evaluation["pairs"]
+                comparison.config(text=f"Confronto sulle {n} nuove tavole, con scelte fissate prima di vedere i colori:\n"
+                                  f"Storico avrebbe vinto: {evaluation['history_wins']}/{n} | Casuale avrebbe vinto: {evaluation['random_wins']}/{n}\n"
+                                  "È un confronto delle scelte di celle, con il numero di caselle previsto per ogni partita. "
+                                  "Una differenza osservata può dipendere dal caso.")
+            else:
+                comparison.config(text="Confronto storico/casuale: ancora nessuna nuova tavola valutata dopo la raccolta iniziale.")
+            if stats.get("invalid_records"):
+                description.config(text=description.cget("text") + f"\nRighe archivio non valide ignorate: {stats['invalid_records']}")
+        difficulty.bind("<<ComboboxSelected>>", refresh)
+        ttk.Button(content, text="Aggiorna", command=refresh).pack(anchor="e", padx=10, pady=5)
+        refresh()
     
     def create_stats_tab(self, parent):
         # Current game stats
@@ -1197,6 +1320,7 @@ class GrattaEVinciGUI:
         add_pause_row(game_loop_frame, 5, "Tra i round (s)", self.sleep_between_rounds_var)
         add_pause_row(game_loop_frame, 6, "Dopo risultato/prima del prossimo bet (s)", self.sleep_after_result_var)
         add_pause_row(game_loop_frame, 7, "Retry colore sconosciuto (s)", self.sleep_color_retry_var)
+        add_pause_row(game_loop_frame, 8, "Attesa scoperta delle 25 celle (s)", self.tile_reveal_delay_var)
 
         add_pause_row(setup_frame, 0, "Prima di click_tile (s)", self.sleep_click_tile_var)
         add_pause_row(setup_frame, 1, "Tra click in decrease_bet_force (s)", self.sleep_decrease_bet_force_var)
@@ -1219,6 +1343,7 @@ class GrattaEVinciGUI:
             self.sleep_between_rounds_var.set(1.0)
             self.sleep_after_result_var.set(2.0)
             self.sleep_color_retry_var.set(1.0)
+            self.tile_reveal_delay_var.set(1.0)
             self.sleep_init_raise_diff_var.set(0.4)
             self.sleep_init_lower_diff_var.set(0.4)
             self.sleep_init_click_var.set(0.3)
@@ -1654,7 +1779,7 @@ class GrattaEVinciGUI:
         instructions = (
             "Una riga = uno step.   Formato:  b=<bet>, p=<picks>, d=<difficulty>\n"
             "  b = importo scommessa (valori validi della lista bet_values)\n"
-            "  p = numero di pick (1, 2, 3, 4)\n"
+            "  p = numero di celle (1-4; 5-8 solo medium)\n"
             "  d = difficoltà (low, medium, high)\n"
             "In caso di vittoria → ritorna allo step 1.   In caso di perdita → avanza allo step successivo."
         )
@@ -1691,10 +1816,10 @@ class GrattaEVinciGUI:
                     d = parts["d"].lower()
                     if b not in self.bet_values:
                         line_errors.append(f"Riga {i}: b={b} non è un valore valido")
-                    if p not in (1, 2, 3, 4):
-                        line_errors.append(f"Riga {i}: p={p} deve essere tra 1 e 4")
                     if d not in ("low", "medium", "high"):
                         line_errors.append(f"Riga {i}: d={d} deve essere low, medium o high")
+                    elif p not in WIN_MULTIPLIERS[d]:
+                        line_errors.append(f"Riga {i}: p={p} non disponibile per {d}; 5-8 solo medium")
                     if not line_errors:
                         new_mode.append({"b": b, "p": p, "d": d})
                     else:
@@ -1739,6 +1864,16 @@ class GrattaEVinciGUI:
 
     def _collect_settings_payload(self):
         return {
+            "tile_record_enabled": self.tile_record_enabled_var.get(),
+            "tile_use_history": self.tile_use_history_var.get(),
+            "tile_reveal_delay": self.tile_reveal_delay_var.get(),
+            "bulk_laptops": [panel.state() for panel in self.bulk_laptops],
+            "bulk_game_rules": {
+                "bet_values": list(self.bulk_bet_values),
+                "mine_config": {d: var.get() for d, var in self.bulk_mine_config_vars.items()},
+                "win_multipliers": {d: {p: var.get() for p, var in values.items()}
+                                    for d, values in self.bulk_win_multiplier_vars.items()},
+            },
             "starting_cash": self.starting_cash_var.get(),
             "target_win": self.target_win_var.get(),
             "max_loss": self.max_loss_var.get(),
@@ -1783,6 +1918,10 @@ class GrattaEVinciGUI:
         }
 
     def _apply_settings_payload(self, settings):
+        self.tile_record_enabled_var.set(settings.get("tile_record_enabled", True))
+        self.tile_use_history_var.set(settings.get("tile_use_history", False))
+        self.tile_reveal_delay_var.set(settings.get("tile_reveal_delay", 1.0))
+        self._update_tile_controls()
         self.starting_cash_var.set(settings.get("starting_cash", 2001.50))
         self.target_win_var.set(settings.get("target_win", 2100.0))
         self.max_loss_var.set(settings.get("max_loss", 10.0))
@@ -1844,6 +1983,21 @@ class GrattaEVinciGUI:
         self._on_mode_changed_settings()
         self._on_grinding_toggle()
 
+        rules = settings.get("bulk_game_rules", {})
+        if rules:
+            self.bulk_bet_values = list(rules["bet_values"])
+            for difficulty, var in self.bulk_mine_config_vars.items():
+                var.set(rules["mine_config"][difficulty])
+                values = rules["win_multipliers"][difficulty]
+                for picks, multiplier_var in self.bulk_win_multiplier_vars[difficulty].items():
+                    multiplier_var.set(values.get(picks, values.get(str(picks), WIN_MULTIPLIERS[difficulty][picks])))
+        for index, panel in enumerate(self.bulk_laptops):
+            saved = settings.get("bulk_laptops", [])
+            if index < len(saved):
+                panel.restore(saved[index])
+            else:
+                panel.copy_current()
+
     def on_save_settings(self):
         """Save settings using SettingsManager."""
         payload = self._collect_settings_payload()
@@ -1898,286 +2052,421 @@ class GrattaEVinciGUI:
             self._on_mode_changed_settings()
             messagebox.showinfo("Reset", "Settings reset to defaults!")
     
-    # ---- Bulk Test Tab ----
+    # ---- Bulk Test Section ----
 
-    def create_bulk_test_tab(self, parent):
-        """Create the Bulk Test tab with scrollable content."""
-        canvas = tk.Canvas(parent)
+    def create_bulk_test_section(self, parent):
+        canvas = tk.Canvas(parent, highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        scroll_frame = ttk.Frame(canvas)
-
-        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Enable mousewheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        # --- Controls ---
-        ctrl_frame = ttk.LabelFrame(scroll_frame, text="Bulk Test", padding=10)
-        ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        ttk.Label(ctrl_frame, text="Ripetizioni:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(fill="both", expand=True)
+        content = ttk.Frame(canvas)
+        window = canvas.create_window(0, 0, window=content, anchor="nw")
+        content.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        self.root.bind("<MouseWheel>", lambda event: canvas.yview_scroll(int(-event.delta / 120), "units")
+                       if canvas.winfo_ismapped() and not isinstance(event.widget, tk.Text) else None, add="+")
+        parent = content
+        ttk.Label(parent, text="Configura i tre laptop e avvia lo stesso numero di simulazioni per ciascuno.",
+                  padding=8).pack(anchor="w")
+        cards = ttk.Frame(parent)
+        cards.pack(fill="x", padx=4, pady=5)
+        self.bulk_laptops = [LaptopPanel(self, cards, number) for number in range(1, 4)]
+        ttk.Label(parent, text="Ogni simulazione riparte dal capitale indicato. Il limite di perdita misura il calo dal saldo più alto; "
+                  "lo stop avviene dopo la giocata e può superare la soglia.", wraplength=810, padding=8).pack(anchor="w")
+        ctrl_frame = ttk.LabelFrame(parent, text="Avvia il confronto", padding=8)
+        ctrl_frame.pack(fill="x", padx=8, pady=5)
+        ttk.Label(ctrl_frame, text="Simulazioni per laptop:").grid(row=0, column=0, sticky="w")
         self.bulk_n_runs_entry = ttk.Entry(ctrl_frame, textvariable=self.bulk_n_runs_var, width=10)
-        self.bulk_n_runs_entry.grid(row=0, column=1, padx=5, pady=2)
-
-        self.bulk_show_logs_check = ttk.Checkbutton(ctrl_frame, text="Mostra log", variable=self.bulk_show_logs_var,
-                                                     command=self._toggle_bulk_log_frame)
-        self.bulk_show_logs_check.grid(row=0, column=2, padx=10, pady=2)
-
-        btn_frame = ttk.Frame(ctrl_frame)
-        btn_frame.grid(row=1, column=0, columnspan=4, pady=5)
-        self.bulk_start_button = ttk.Button(btn_frame, text="AVVIA BULK TEST", command=self.start_bulk_test)
-        self.bulk_start_button.pack(side=tk.LEFT, padx=5)
-        self.bulk_stop_button = ttk.Button(btn_frame, text="FERMA", command=self.stop_bulk_test, state="disabled")
-        self.bulk_stop_button.pack(side=tk.LEFT, padx=5)
-
-        # Progress
+        self.bulk_n_runs_entry.grid(row=0, column=1, padx=5)
+        self.bulk_start_button = ttk.Button(ctrl_frame, text="AVVIA BULK TEST", command=self.start_bulk_test)
+        self.bulk_start_button.grid(row=0, column=2, padx=5)
+        self.bulk_stop_button = ttk.Button(ctrl_frame, text="FERMA", command=self.stop_bulk_test, state="disabled")
+        self.bulk_stop_button.grid(row=0, column=3, padx=5)
         self.bulk_progress_var = tk.DoubleVar(value=0)
-        self.bulk_progress_bar = ttk.Progressbar(ctrl_frame, variable=self.bulk_progress_var, maximum=100, length=400)
-        self.bulk_progress_bar.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=2, padx=5)
-        self.bulk_progress_label = ttk.Label(ctrl_frame, text="0/0 (0%)")
-        self.bulk_progress_label.grid(row=2, column=3, padx=5)
+        self.bulk_progress_bar = ttk.Progressbar(ctrl_frame, variable=self.bulk_progress_var, maximum=100, length=450)
+        self.bulk_progress_bar.grid(row=1, column=0, columnspan=3, sticky="ew", pady=8)
+        self.bulk_progress_label = ttk.Label(ctrl_frame, text="0/0")
+        self.bulk_progress_label.grid(row=1, column=3)
         self.bulk_status_label = ttk.Label(ctrl_frame, text="In attesa")
-        self.bulk_status_label.grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=2)
+        self.bulk_status_label.grid(row=2, column=0, columnspan=4, sticky="w")
+        self.bulk_time_label = ttk.Label(ctrl_frame, text="")
+        self.bulk_time_label.grid(row=3, column=0, columnspan=4, sticky="w")
+        ttk.Label(ctrl_frame, text="Cartella risultati:").grid(row=4, column=0, sticky="w", pady=5)
+        ttk.Entry(ctrl_frame, textvariable=self.bulk_output_dir_var, width=42).grid(row=4, column=1, columnspan=2, sticky="ew")
+        ttk.Button(ctrl_frame, text="Sfoglia...", command=self._choose_bulk_output_dir).grid(row=4, column=3)
+        ttk.Label(ctrl_frame, text="Risultati salvati in JSON e Excel.").grid(row=5, column=0, columnspan=4, sticky="w")
+        ttk.Button(ctrl_frame, text="Regole del gioco...", command=self._show_bulk_rules).grid(row=6, column=0, sticky="w", pady=5)
+        ttk.Button(ctrl_frame, text="Salva configurazioni", command=self.on_save_settings).grid(row=6, column=1, columnspan=2, sticky="w")
+        self.bulk_show_logs_check = ttk.Checkbutton(ctrl_frame, text="Mostra log", variable=self.bulk_show_logs_var,
+                                                    command=self._toggle_bulk_log_frame)
+        self.bulk_show_logs_check.grid(row=6, column=3)
+        self.bulk_log_frame = ttk.LabelFrame(parent, text="Log", padding=5)
+        self.bulk_log_text = scrolledtext.ScrolledText(self.bulk_log_frame, height=5, font=("Courier", 9))
+        self.bulk_log_text.pack(fill="x")
+        # --- Export ---
+        export_frame = ttk.Frame(parent)
+        export_frame.pack(fill=tk.X, padx=5, pady=10)
+        self.bulk_export_button = ttk.Button(export_frame, text="ESPORTA EXCEL", command=self.export_bulk_excel,
+                                              state="disabled")
+        self.bulk_export_button.pack(side=tk.LEFT, padx=5)
+        self.bulk_results_button = ttk.Button(export_frame, text="MOSTRA RISULTATI",
+                                             command=lambda: self._show_bulk_grid_popup(self._bulk_results),
+                                             state="disabled")
+        self.bulk_results_button.pack(side=tk.LEFT, padx=5)
+        self.bulk_load_button = ttk.Button(export_frame, text="Apri risultati salvati", command=self.load_bulk_results)
+        self.bulk_load_button.pack(side=tk.LEFT, padx=5)
+        ttk.Button(export_frame, text="ESPORTA DETTAGLI CSV", command=self.export_bulk_csv).pack(side=tk.LEFT, padx=5)
 
-        # --- Log (optional) ---
-        self.bulk_log_frame = ttk.LabelFrame(scroll_frame, text="Log", padding=5)
-        self.bulk_log_frame.pack(fill=tk.X, padx=5, pady=5)
-        self.bulk_log_text = scrolledtext.ScrolledText(self.bulk_log_frame, height=8, state="normal",
-                                                        font=("Courier", 9))
-        self.bulk_log_text.pack(fill=tk.X)
-
+    def _show_bulk_rules(self):
+        parent = tk.Toplevel(self.root)
+        parent.title("Regole del gioco - comuni ai tre laptop")
         # --- Advanced Params ---
-        adv_frame = ttk.LabelFrame(scroll_frame, text="Parametri Avanzati", padding=10)
+        adv_frame = ttk.LabelFrame(parent, text="Parametri Avanzati", padding=10)
         adv_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # WIN_MULTIPLIERS grid
-        ttk.Label(adv_frame, text="WIN_MULTIPLIERS:", font=("", 10, "bold")).grid(row=0, column=0, columnspan=5,
+        ttk.Label(adv_frame, text="Moltiplicatori di vincita:", font=("", 10, "bold")).grid(row=0, column=0, columnspan=5,
                                                                                     sticky=tk.W, pady=(0, 5))
-        for col_i, p in enumerate([1, 2, 3, 4]):
+        for col_i, p in enumerate(range(1, MAX_PICKS + 1)):
             ttk.Label(adv_frame, text=f"p={p}").grid(row=1, column=col_i + 1, padx=5)
         for row_i, d in enumerate(["low", "medium", "high"]):
             ttk.Label(adv_frame, text=f"{d}:").grid(row=row_i + 2, column=0, sticky=tk.W, padx=5)
-            for col_i, p in enumerate([1, 2, 3, 4]):
-                ttk.Entry(adv_frame, textvariable=self.bulk_win_multiplier_vars[d][p], width=6).grid(
-                    row=row_i + 2, column=col_i + 1, padx=3, pady=1)
+            for col_i, p in enumerate(range(1, MAX_PICKS + 1)):
+                if p in self.bulk_win_multiplier_vars[d]:
+                    widget = ttk.Entry(adv_frame, textvariable=self.bulk_win_multiplier_vars[d][p], width=6)
+                else:
+                    widget = ttk.Label(adv_frame, text="—")
+                widget.grid(row=row_i + 2, column=col_i + 1, padx=3, pady=1)
 
         # MINE_CONFIG
-        ttk.Label(adv_frame, text="MINE_CONFIG (mines per difficulty):", font=("", 10, "bold")).grid(
+        ttk.Label(adv_frame, text="Numero mine per difficolta:", font=("", 10, "bold")).grid(
             row=6, column=0, columnspan=5, sticky=tk.W, pady=(10, 5))
         for col_i, d in enumerate(["low", "medium", "high"]):
             ttk.Label(adv_frame, text=f"{d}:").grid(row=7, column=col_i * 2, sticky=tk.E, padx=2)
-            ttk.Spinbox(adv_frame, from_=0, to=24, textvariable=self.bulk_mine_config_vars[d], width=4).grid(
+            ttk.Spinbox(adv_frame, from_=0, to=25, textvariable=self.bulk_mine_config_vars[d], width=4).grid(
                 row=7, column=col_i * 2 + 1, padx=2)
 
         # BETTING_MODES / BET_VALUES buttons
         btn_adv_frame = ttk.Frame(adv_frame)
         btn_adv_frame.grid(row=8, column=0, columnspan=5, pady=10)
-        ttk.Button(btn_adv_frame, text="Modifica sequenze BETTING_MODES",
-                   command=self.open_bulk_betting_modes_editor).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_adv_frame, text="Modifica BET_VALUES",
+        ttk.Button(btn_adv_frame, text="Puntate consentite",
                    command=self.open_bulk_bet_values_editor).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_adv_frame, text="Ripristina defaults",
                    command=self.reset_bulk_advanced_params).pack(side=tk.LEFT, padx=5)
 
-        # --- Export ---
-        export_frame = ttk.Frame(scroll_frame)
-        export_frame.pack(fill=tk.X, padx=5, pady=10)
-        self.bulk_export_button = ttk.Button(export_frame, text="ESPORTA EXCEL", command=self.export_bulk_excel,
-                                              state="disabled")
-        self.bulk_export_button.pack()
+    def _choose_bulk_output_dir(self):
+        from tkinter import filedialog
+        path = filedialog.askdirectory(initialdir=self.bulk_output_dir_var.get())
+        if path:
+            self.bulk_output_dir_var.set(path)
 
     def _toggle_bulk_log_frame(self):
         if self.bulk_show_logs_var.get():
+            self.bulk_logs_event.set()
             self.bulk_log_frame.pack(fill=tk.X, padx=5, pady=5)
         else:
+            self.bulk_logs_event.clear()
             self.bulk_log_frame.pack_forget()
 
     # ---- Bulk Test Control ----
 
     def start_bulk_test(self):
-        n = self.bulk_n_runs_var.get()
-        if n <= 0:
-            messagebox.showerror("Errore", "Il numero di ripetizioni deve essere > 0")
+        if self.bulk_test_running:
             return
+        try:
+            n = int(self.bulk_n_runs_entry.get())
+            if n <= 0:
+                raise ValueError("Le ripetizioni devono essere un intero maggiore di zero.")
+            settings = [panel.snapshot() for panel in self.bulk_laptops]
+            self._launch_bulk(settings, n)
+        except (ValueError, TypeError, KeyError, tk.TclError, OSError) as error:
+            messagebox.showerror("Parametri Bulk Test", str(error))
+            return
+
+    def _launch_bulk(self, settings, n):
+        if self.bulk_test_running:
+            return
+        output_text = self.bulk_output_dir_var.get().strip()
+        if not output_text:
+            raise ValueError("Scegli una cartella per il salvataggio automatico.")
+        output_dir = Path(output_text).expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
         self.bulk_test_running = True
-        self.bulk_test_stop = False
+        self.bulk_stop_event.clear()
         self._bulk_results = None
         self.bulk_start_button.config(state="disabled")
         self.bulk_stop_button.config(state="normal")
         self.bulk_export_button.config(state="disabled")
+        self.bulk_results_button.config(state="disabled")
+        self.bulk_load_button.config(state="disabled")
+        self.bulk_n_runs_entry.config(state="disabled")
         self.bulk_progress_var.set(0)
-        self.bulk_progress_label.config(text=f"0/{n} (0%)")
-        self.bulk_status_label.config(text="In esecuzione...")
+        self.bulk_total_runs = n * len(settings)
+        self.bulk_done_runs = 0
+        self.bulk_started_at = time.monotonic()
+        self.bulk_status_label.config(text="Confronto dei tre laptop in esecuzione")
         self.bulk_log_text.delete("1.0", tk.END)
-        threading.Thread(target=self._bulk_test_worker, daemon=True).start()
+        self.bulk_events = queue.Queue()
+        filename = f"bulk_test_{datetime.now():%Y%m%d_%H%M%S_%f}"
+        json_path = output_dir / (filename + ".json")
+        self.bulk_worker_thread = threading.Thread(
+            target=self._bulk_test_worker, args=(settings, n, json_path), daemon=True)
+        self.bulk_worker_thread.start()
+        self._bulk_poll_events()
+
+    def export_bulk_csv(self):
+        if self._bulk_results is None:
+            return
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("Dettagli CSV", "*.csv")])
+        if path:
+            try:
+                write_bulk_csv(path, self._bulk_results)
+            except OSError as error:
+                messagebox.showerror("Esportazione CSV", str(error))
 
     def stop_bulk_test(self):
-        self.bulk_test_stop = True
-        self.bulk_status_label.config(text="Interruzione in corso...")
+        self.bulk_stop_event.set()
+        self.bulk_status_label.config(text="Interruzione e salvataggio in corso...")
+        self.bulk_stop_button.config(state="disabled")
 
-    def _bulk_test_worker(self):
-        n = self.bulk_n_runs_var.get()
+    def _bulk_test_worker(self, settings, n, json_path):
+        latest = None
+        warnings = []
+        last_progress = 0.0
+        last_log = 0.0
+
+        def checkpoint(batch):
+            nonlocal latest
+            latest = batch
+            try:
+                save_bulk_json(json_path, batch)
+            except OSError as error:
+                warning = f"Salvataggio archivio non riuscito: {error}"
+                if warning not in warnings:
+                    warnings.append(warning)
+                    self.bulk_events.put(("log", warning))
+
+        def progress(done, total):
+            nonlocal last_progress
+            now = time.monotonic()
+            if done == total or now - last_progress >= 0.1:
+                last_progress = now
+                self.bulk_events.put(("progress", (done, total)))
+
+        def log(message):
+            nonlocal last_log
+            now = time.monotonic()
+            if now - last_log >= 0.1:
+                self.bulk_events.put(("log", message))
+                last_log = now
+
         try:
-            results = self.game_engine.run_bulk_test(
-                n_runs=n,
-                progress_cb=self._bulk_update_progress,
-                log_cb=self._bulk_log_message,
-                stop_check=lambda: self.bulk_test_stop,
-                show_logs=lambda: self.bulk_show_logs_var.get(),
-            )
-        except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Errore Bulk Test", str(e)))
-            self.root.after(0, self._on_bulk_test_failed)
-            return
-        self.root.after(0, lambda: self._on_bulk_test_complete(results))
+            batch = run_bulk_batch(
+                settings, n, None, progress, log,
+                self.bulk_stop_event.is_set, self.bulk_logs_event.is_set, checkpoint)
+            save_bulk_json(json_path, batch)
+            try:
+                write_bulk_excel(json_path.with_suffix(".xlsx"), batch)
+            except Exception as error:
+                warnings.append(f"Esportazione Excel automatica non riuscita: {error}")
+            self.bulk_events.put(("complete", (batch, json_path, warnings)))
+        except Exception as error:
+            if latest is not None:
+                latest["status"] = "error"
+                latest["error"] = str(error)
+                checkpoint(latest)
+            self.bulk_events.put(("error", (str(error), latest)))
 
-    def _on_bulk_test_complete(self, results):
+    @staticmethod
+    def _bulk_duration(seconds):
+        seconds = max(0, int(seconds))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:d}h {minutes:02d}m {seconds:02d}s" if hours else f"{minutes:d}m {seconds:02d}s"
+
+    def _bulk_poll_events(self):
+        self.bulk_poll_after_id = None
+        for _ in range(200):
+            try:
+                kind, data = self.bulk_events.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "progress":
+                self.bulk_done_runs, self.bulk_total_runs = data
+                self._bulk_update_progress(*data)
+            elif kind == "log":
+                self._bulk_log_message(data)
+            elif kind == "complete":
+                batch, path, warnings = data
+                self._on_bulk_test_complete(batch, path, warnings)
+            elif kind == "error":
+                error, batch = data
+                self._bulk_results = batch
+                self._on_bulk_test_failed()
+                if not self.closing:
+                    messagebox.showerror("Errore Bulk Test", error)
+
+        if self.bulk_test_running:
+            elapsed = time.monotonic() - self.bulk_started_at
+            done = self.bulk_done_runs
+            remaining = elapsed * (self.bulk_total_runs - done) / done if done else None
+            eta = self._bulk_duration(remaining) if remaining is not None else "in stima"
+            self.bulk_time_label.config(text=f"Trascorso: {self._bulk_duration(elapsed)} | Rimanente: {eta}")
+            self.bulk_poll_after_id = self.root.after(100, self._bulk_poll_events)
+
+    def _restore_bulk_controls(self):
         self.bulk_test_running = False
-        self._bulk_results = results
-        runs = results[4]
-        n = self.bulk_n_runs_var.get()
         self.bulk_start_button.config(state="normal")
         self.bulk_stop_button.config(state="disabled")
-        self.bulk_export_button.config(state="normal")
-        self.bulk_status_label.config(text=f"Completato {runs}/{n} - Pronto per export")
-        self._show_bulk_grid_popup(results)
+        self.bulk_load_button.config(state="normal")
+        self.bulk_n_runs_entry.config(state="normal")
+        state = "normal" if self._bulk_results is not None else "disabled"
+        self.bulk_export_button.config(state=state)
+        self.bulk_results_button.config(state=state)
 
-    def _show_bulk_grid_popup(self, results):
-        """Show a popup with the win-rate grid, matching the Excel output."""
-        success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs = results
-        if not profit_thresholds or not loss_thresholds or n_runs == 0:
+    def _on_bulk_test_complete(self, batch, path=None, warnings=()):
+        self._bulk_results = batch
+        self._restore_bulk_controls()
+        completed = sum(config["summary"]["completed_runs"] for config in batch["configurations"])
+        total = batch["requested_runs"] * len(batch["configurations"])
+        self._bulk_update_progress(completed, total)
+        status = "Interrotto" if batch["status"] == "interrupted" else "Completato"
+        self.bulk_status_label.config(text=f"{status}: {completed}/{total} sessioni completate")
+        self.bulk_time_label.config(text=f"Durata: {self._bulk_duration(batch['elapsed_seconds'])}")
+        if path:
+            self._bulk_log_message(f"Risultati: {path}")
+        for warning in warnings:
+            self._bulk_log_message(warning)
+        if not self.closing:
+            if warnings:
+                messagebox.showwarning("Salvataggio Bulk Test", "\n".join(warnings))
+            self._show_bulk_grid_popup(batch)
+
+    def _show_bulk_grid_popup(self, batch):
+        if batch is None:
             return
-
         win = tk.Toplevel(self.root)
-        win.title(f"Griglia Win Rate - {n_runs} run")
+        win.title("Risultati Bulk Test - confronto laptop")
+        win.geometry("1150x750")
+        win.minsize(1000, 700)
+        notebook = ttk.Notebook(win)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        add_laptop_results(notebook, batch)
+        def number(value):
+            return "-" if value is None else f"{value:.2f}"
 
-        n_cols = len(profit_thresholds)
-        n_rows = len(loss_thresholds)
-        cell_w = 50
-        header_w = 70
-        cell_h = 22
-        grid_w = header_w + n_cols * cell_w
-        grid_h = cell_h + n_rows * cell_h
-        win_w = min(max(grid_w + 40, 400), 1200)
-        win_h = min(max(grid_h + 60, 300), 800)
-        win.geometry(f"{win_w}x{win_h}")
-        win.resizable(True, True)
-
-        outer = ttk.Frame(win)
+        grid_tab = ttk.Frame(notebook)
+        notebook.add(grid_tab, text="Dettaglio avanzato")
+        labels = [f"{config['id']}. {config['label']}" for config in batch["configurations"]]
+        selected = ttk.Combobox(grid_tab, values=labels, state="readonly", width=90)
+        selected.pack(fill=tk.X, pady=5)
+        description = ttk.Label(grid_tab, wraplength=1080, justify=tk.LEFT)
+        description.pack(anchor=tk.W, pady=5)
+        ttk.Label(grid_tab, text="Righe: calo massimo osservato dal picco. Colonne: profitto raggiunto. "
+                  "Non sono simulazioni con stop loss diversi. Seleziona una cella per conteggio e IC 95%.",
+                  wraplength=1080).pack(anchor=tk.W, pady=5)
+        cell_info = ttk.Label(grid_tab, text="")
+        cell_info.pack(anchor=tk.W, pady=5)
+        outer = ttk.Frame(grid_tab)
         outer.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        horizontal = ttk.Scrollbar(outer, orient="horizontal", command=canvas.xview)
+        vertical = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(xscrollcommand=horizontal.set, yscrollcommand=vertical.set)
+        horizontal.pack(side=tk.BOTTOM, fill=tk.X)
+        vertical.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(fill=tk.BOTH, expand=True)
+        content = ttk.Frame(canvas)
+        canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
 
-        canvas = tk.Canvas(outer)
-        h_scroll = ttk.Scrollbar(outer, orient="horizontal", command=canvas.xview)
-        v_scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+        def show_cell(count, total, loss, profit):
+            low, high = wilson_interval(count, total)
+            cell_info.config(text=f"Calo ≤ {loss:g}, profitto ≥ {profit:g}: {count}/{total} sessioni | "
+                             f"IC 95%: {number(low)}% … {number(high)}%")
 
-        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        def render(_event=None):
+            for widget in content.winfo_children():
+                widget.destroy()
+            config = batch["configurations"][selected.current()]
+            summary = config["summary"]
+            counts = summary["stop_counts"]
+            reasons = STOP_LABELS.items()
+            description.config(text=" | ".join(f"{title}: {counts.get(key, 0)}" for key, title in reasons)
+                               + f"\nProfitto medio {number(summary['avg_profit'])}; mediana {number(summary['median_profit'])}; "
+                               f"P5/P95 {number(summary['p05_profit'])}/{number(summary['p95_profit'])}; "
+                               f"min/max {number(summary['min_profit'])}/{number(summary['max_profit'])}. "
+                               f"Positive: {number(summary['positive_rate'])}% "
+                               f"(IC 95% {number(summary['positive_ci_low'])} … {number(summary['positive_ci_high'])}%).")
+            cell_info.config(text="")
+            if config["settings"].get("activity", {}).get("enabled"):
+                ttk.Label(content, text="Questo vecchio report descrive un periodo di attivita: la griglia delle sessioni non e disponibile.").pack()
+                return
+            total = summary["completed_runs"]
+            tk.Label(content, text="Calo / Profitto", relief="ridge", width=16).grid(row=0, column=0, sticky="nsew")
+            for col, profit in enumerate(config["profit_thresholds"], 1):
+                tk.Label(content, text=f"{profit:g}", width=8, relief="ridge").grid(row=0, column=col, sticky="nsew")
+            for row, loss in enumerate(config["loss_thresholds"], 1):
+                tk.Label(content, text=f"{loss:g}", relief="ridge").grid(row=row, column=0, sticky="nsew")
+                for col, profit in enumerate(config["profit_thresholds"], 1):
+                    count = config["success_counts"][row - 1][col - 1]
+                    pct = count / total * 100 if total else None
+                    if pct is None:
+                        color = "#eeeeee"
+                    else:
+                        start, end = ((248, 105, 107), (255, 235, 132)) if pct <= 50 else ((255, 235, 132), (99, 190, 123))
+                        fraction = pct / 50 if pct <= 50 else (pct - 50) / 50
+                        color = "#" + "".join(f"{int(a + (b - a) * fraction):02x}" for a, b in zip(start, end))
+                    cell = tk.Label(content, text=f"{pct:.1f}%" if pct is not None else "?",
+                                    bg=color, fg="#202020", relief="ridge", cursor="hand2")
+                    cell.grid(row=row, column=col, sticky="nsew")
+                    cell.bind("<Button-1>", lambda event, c=count, n=total, l=loss, p=profit: show_cell(c, n, l, p))
+            canvas.xview_moveto(0)
+            canvas.yview_moveto(0)
 
-        grid_frame = ttk.Frame(canvas)
-        canvas.create_window((0, 0), window=grid_frame, anchor="nw")
-        grid_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind("<MouseWheel>", _on_mousewheel)
-
-        def pct_to_color(pct):
-            if pct <= 50:
-                r = int(248 + (255 - 248) * pct / 50)
-                g = int(105 + (235 - 105) * pct / 50)
-                b = int(132 - (132 - 132) * pct / 50)
-            else:
-                t = (pct - 50) / 50
-                r = int(255 - (255 - 99) * t)
-                g = int(235 - (235 - 190) * t)
-                b = int(132 - (132 - 123) * t)
-            return f"#{r:02x}{g:02x}{b:02x}"
-
-        # Header corner
-        tk.Label(grid_frame, text="L \\ P", font=("Courier", 9, "bold"), width=8,
-                 relief="ridge", bg="#d0d0d0").grid(row=0, column=0, sticky="nsew")
-
-        # Column headers
-        for col_i, P in enumerate(profit_thresholds):
-            tk.Label(grid_frame, text=str(P), font=("Courier", 9, "bold"), width=6,
-                     relief="ridge", bg="#d0d0d0", anchor="center").grid(row=0, column=col_i + 1, sticky="nsew")
-
-        # Data rows
-        for row_i, L in enumerate(loss_thresholds):
-            tk.Label(grid_frame, text=str(L), font=("Courier", 9, "bold"), width=8,
-                     relief="ridge", bg="#d0d0d0", anchor="center").grid(row=row_i + 1, column=0, sticky="nsew")
-            for col_i, P in enumerate(profit_thresholds):
-                count = success_counts.get((L, P), 0)
-                pct = round(count / n_runs * 100, 1)
-                bg = pct_to_color(pct)
-                fg = "#000000" if pct > 25 else "#ffffff"
-                tk.Label(grid_frame, text=f"{pct:.1f}", font=("Courier", 9), width=6,
-                         relief="ridge", bg=bg, fg=fg, anchor="center").grid(
-                    row=row_i + 1, column=col_i + 1, sticky="nsew")
-
+        selected.bind("<<ComboboxSelected>>", render)
+        if labels:
+            selected.current(0)
+            render()
     def _on_bulk_test_failed(self):
-        self.bulk_test_running = False
-        self.bulk_start_button.config(state="normal")
-        self.bulk_stop_button.config(state="disabled")
-        self.bulk_status_label.config(text="Errore durante l'esecuzione")
+        self._restore_bulk_controls()
+        self.bulk_status_label.config(text="Errore durante l'esecuzione; i risultati disponibili restano esportabili.")
 
-    def _bulk_log_message(self, msg):
-        def _do():
-            if msg == "__CLEAR__":
-                self.bulk_log_text.delete("1.0", tk.END)
-            else:
-                self.bulk_log_text.insert(tk.END, msg + "\n")
-                self.bulk_log_text.see(tk.END)
-        self.root.after(0, _do)
+    def _bulk_log_message(self, message):
+        self.bulk_log_text.insert(tk.END, message + "\n")
+        lines = int(self.bulk_log_text.index("end-1c").split(".")[0])
+        if lines > 200:
+            self.bulk_log_text.delete("1.0", f"{lines - 200}.0")
+        self.bulk_log_text.see(tk.END)
 
-    def _bulk_update_progress(self, i, n):
-        pct = int(i / n * 100) if n > 0 else 0
-        self.root.after(0, lambda: self.bulk_progress_var.set(pct))
-        self.root.after(0, lambda: self.bulk_progress_label.config(text=f"{i}/{n} ({pct}%)"))
+    def _bulk_update_progress(self, done, total):
+        pct = done / total * 100 if total else 0
+        self.bulk_progress_var.set(pct)
+        self.bulk_progress_label.config(text=f"{done}/{total} ({pct:.1f}%)")
+
+    def load_bulk_results(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(initialdir=self.bulk_output_dir_var.get(),
+                                          filetypes=[("Risultati Bulk Test", "*.json")])
+        if not path:
+            return
+        try:
+            batch = load_bulk_json(path)
+            # Check fields used by the viewer before replacing the current result.
+            for config in batch["configurations"]:
+                if len(config["success_counts"]) != len(config["loss_thresholds"]):
+                    raise ValueError("Griglia risultati incompleta.")
+                if any(len(row) != len(config["profit_thresholds"]) for row in config["success_counts"]):
+                    raise ValueError("Griglia risultati incompleta.")
+                if not isinstance(config["summary"]["stop_counts"], dict):
+                    raise ValueError("Riepilogo risultati non valido.")
+            self._on_bulk_test_complete(batch, Path(path))
+        except (ValueError, TypeError, KeyError, AttributeError, OSError) as error:
+            messagebox.showerror("Caricamento risultati", str(error))
 
     # ---- Bulk Advanced Param Editors ----
-
-    def open_bulk_betting_modes_editor(self):
-        win = tk.Toplevel(self.root)
-        win.title("Modifica BETTING_MODES (Bulk)")
-        win.geometry("500x400")
-        win.grab_set()
-
-        texts = {}
-        for mode_name in ["normal", "medium", "high", "safe"]:
-            frame = ttk.LabelFrame(win, text=mode_name, padding=5)
-            frame.pack(fill=tk.X, padx=10, pady=5)
-            t = tk.Text(frame, height=2, width=60)
-            t.insert("1.0", ", ".join(str(v) for v in self.bulk_betting_modes.get(mode_name, [])))
-            t.pack(fill=tk.X)
-            texts[mode_name] = t
-
-        def on_save():
-            for mode_name, t in texts.items():
-                raw = t.get("1.0", tk.END).strip()
-                if not raw:
-                    self.bulk_betting_modes[mode_name] = []
-                    continue
-                try:
-                    vals = [float(x.strip()) for x in raw.split(",") if x.strip()]
-                    if any(v <= 0 for v in vals):
-                        raise ValueError("Valori devono essere positivi")
-                    self.bulk_betting_modes[mode_name] = vals
-                except ValueError as e:
-                    messagebox.showerror("Errore", f"Errore in {mode_name}: {e}")
-                    return
-            win.destroy()
-
-        ttk.Button(win, text="Salva", command=on_save).pack(pady=10)
 
     def open_bulk_bet_values_editor(self):
         win = tk.Toplevel(self.root)
@@ -2212,7 +2501,7 @@ class GrattaEVinciGUI:
         self.bulk_betting_modes = {k: list(v) for k, v in BETTING_MODES.items()}
         self.bulk_bet_values = list(BET_VALUES)
         for d in ["low", "medium", "high"]:
-            for p in [1, 2, 3, 4]:
+            for p in self.bulk_win_multiplier_vars[d]:
                 self.bulk_win_multiplier_vars[d][p].set(WIN_MULTIPLIERS[d][p])
             self.bulk_mine_config_vars[d].set(TEST_MODE_MINE_CONFIG[d])
         messagebox.showinfo("Reset", "Parametri avanzati ripristinati ai valori default.")
@@ -2220,159 +2509,41 @@ class GrattaEVinciGUI:
     # ---- Bulk Excel Export ----
 
     def export_bulk_excel(self):
-        if not self._bulk_results:
+        if self._bulk_results is None:
             messagebox.showerror("Errore", "Nessun risultato da esportare.")
             return
         from tkinter import filedialog
-        import datetime
-        default_name = f"bulk_test_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        filepath = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
-                                                 initialfile=default_name)
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
+            initialfile=f"bulk_test_{datetime.now():%Y%m%d_%H%M%S}.xlsx")
         if not filepath:
             return
         try:
-            success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs = self._bulk_results
-            self._write_excel(filepath, success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs)
+            self._write_excel(filepath, self._bulk_results)
             messagebox.showinfo("Export", f"File salvato: {filepath}")
-        except Exception as e:
-            messagebox.showerror("Errore Export", str(e))
+        except Exception as error:
+            messagebox.showerror("Errore Export", str(error))
 
-    def _write_excel(self, filepath, success_counts, profit_thresholds, loss_thresholds, snapshot, n_runs):
-        from openpyxl import Workbook
-        from openpyxl.styles import PatternFill, Font, Alignment
-        from openpyxl.formatting.rule import ColorScaleRule
-        from openpyxl.utils import get_column_letter
-
-        wb = Workbook()
-
-        # --- Sheet 1: Griglia Win Rate ---
-        ws1 = wb.active
-        ws1.title = "Griglia Win Rate"
-
-        # Header row
-        ws1.cell(row=1, column=1, value="maxloss \\ profitto")
-        ws1.cell(row=1, column=1).font = Font(bold=True)
-        for col_i, P in enumerate(profit_thresholds):
-            ws1.cell(row=1, column=col_i + 2, value=P).font = Font(bold=True)
-
-        # Data rows
-        for row_i, L in enumerate(loss_thresholds):
-            ws1.cell(row=row_i + 2, column=1, value=L).font = Font(bold=True)
-            for col_i, P in enumerate(profit_thresholds):
-                count = success_counts.get((L, P), 0)
-                pct = round(count / n_runs * 100, 1) if n_runs > 0 else 0
-                cell = ws1.cell(row=row_i + 2, column=col_i + 2, value=pct)
-                cell.number_format = '0.0'
-                cell.alignment = Alignment(horizontal='center')
-
-        # Conditional formatting: 3-color scale (red 0 -> yellow 50 -> green 100)
-        data_start = "B2"
-        data_end = f"{get_column_letter(len(profit_thresholds) + 1)}{len(loss_thresholds) + 1}"
-        ws1.conditional_formatting.add(
-            f"{data_start}:{data_end}",
-            ColorScaleRule(
-                start_type="num", start_value=0, start_color="F8696B",
-                mid_type="num", mid_value=50, mid_color="FFEB84",
-                end_type="num", end_value=100, end_color="63BE7B",
-            ),
-        )
-
-        # Freeze panes
-        ws1.freeze_panes = "B2"
-
-        # Auto-width for first column
-        ws1.column_dimensions["A"].width = 18
-
-        # --- Sheet 2: Impostazioni ---
-        ws2 = wb.create_sheet("Impostazioni")
-        settings_data = [
-            ("Bankroll iniziale", snapshot["starting_cash"]),
-            ("Target profit", snapshot["target_profit"]),
-            ("Max loss", snapshot["max_loss"]),
-            ("Max rounds", snapshot["max_rounds"]),
-            ("Betting mode", snapshot["mode"]),
-            ("Difficulty", snapshot["difficulty"]),
-            ("Max picks", snapshot["max_picks"]),
-            ("Grinding", "ON" if snapshot["grinding_enabled"] else "OFF"),
-            ("Grinding range", snapshot["grinding_range"]),
-            ("p_random", "ON" if snapshot["p_random"] else "OFF"),
-            ("N runs eseguiti", n_runs),
-        ]
-        for row_i, (label, val) in enumerate(settings_data):
-            ws2.cell(row=row_i + 1, column=1, value=label).font = Font(bold=True)
-            ws2.cell(row=row_i + 1, column=2, value=val)
-
-        # WIN_MULTIPLIERS table
-        start_row = len(settings_data) + 3
-        ws2.cell(row=start_row, column=1, value="WIN_MULTIPLIERS").font = Font(bold=True)
-        for col_i, p in enumerate([1, 2, 3, 4]):
-            ws2.cell(row=start_row, column=col_i + 2, value=f"p={p}").font = Font(bold=True)
-        for row_i, d in enumerate(["low", "medium", "high"]):
-            ws2.cell(row=start_row + 1 + row_i, column=1, value=d).font = Font(bold=True)
-            for col_i, p in enumerate([1, 2, 3, 4]):
-                ws2.cell(row=start_row + 1 + row_i, column=col_i + 2, value=snapshot["win_multipliers"][d][p])
-
-        # MINE_CONFIG
-        mine_row = start_row + 5
-        ws2.cell(row=mine_row, column=1, value="MINE_CONFIG").font = Font(bold=True)
-        for col_i, d in enumerate(["low", "medium", "high"]):
-            ws2.cell(row=mine_row, column=col_i + 2, value=f"{d}: {snapshot['mine_config'][d]}")
-
-        # Betting sequence
-        seq_row = mine_row + 2
-        ws2.cell(row=seq_row, column=1, value="Betting sequence").font = Font(bold=True)
-        ws2.cell(row=seq_row, column=2, value=str(snapshot["betting_sequence"]))
-
-        ws2.column_dimensions["A"].width = 20
-        ws2.column_dimensions["B"].width = 30
-
-        # --- Sheet 3: Sommario ---
-        ws3 = wb.create_sheet("Sommario")
-        ws3.cell(row=1, column=1, value="Totale run").font = Font(bold=True)
-        ws3.cell(row=1, column=2, value=n_runs)
-
-        target_p = int(max(profit_thresholds)) if profit_thresholds else 0
-        max_l = int(max(loss_thresholds)) if loss_thresholds else 0
-
-        # % runs that reached full target (using highest loss threshold = most permissive)
-        target_count = success_counts.get((max_l, target_p), 0) if target_p and max_l else 0
-        ws3.cell(row=2, column=1, value="% raggiunto target (profit >= target)").font = Font(bold=True)
-        ws3.cell(row=2, column=2, value=f"{round(target_count / n_runs * 100, 1)}%" if n_runs > 0 else "0%")
-
-        # % stopped by max_loss (complementary at tightest threshold)
-        min_l = int(min(loss_thresholds)) if loss_thresholds else 0
-        fail_count_tight = n_runs - success_counts.get((min_l, 1), 0) if min_l else n_runs
-        ws3.cell(row=3, column=1, value=f"% fallite a L={min_l} (qualsiasi P)").font = Font(bold=True)
-        ws3.cell(row=3, column=2, value=f"{round(fail_count_tight / n_runs * 100, 1)}%" if n_runs > 0 else "0%")
-
-        # Extremes
-        ws3.cell(row=5, column=1, value="Celle estreme:").font = Font(bold=True)
-        if loss_thresholds and profit_thresholds:
-            corners = [
-                (min(loss_thresholds), min(profit_thresholds)),
-                (min(loss_thresholds), max(profit_thresholds)),
-                (max(loss_thresholds), min(profit_thresholds)),
-                (max(loss_thresholds), max(profit_thresholds)),
-            ]
-            for i, (l, p) in enumerate(corners):
-                cnt = success_counts.get((l, p), 0)
-                pct = round(cnt / n_runs * 100, 1) if n_runs > 0 else 0
-                ws3.cell(row=6 + i, column=1, value=f"L={l}, P={p}")
-                ws3.cell(row=6 + i, column=2, value=f"{pct}%")
-
-        ws3.column_dimensions["A"].width = 35
-        ws3.column_dimensions["B"].width = 15
-
-        wb.save(filepath)
+    def _write_excel(self, filepath, batch):
+        write_bulk_excel(filepath, batch)
 
     def on_closing(self):
         """Handle application closing"""
+        self.closing = True
         if self.mouse_monitor_after_id is not None:
             self.root.after_cancel(self.mouse_monitor_after_id)
+            self.mouse_monitor_after_id = None
         self.game_running = False
-        self.bulk_test_stop = True
+        self.bulk_stop_event.set()
         self.stop_event.set()
         self.running_event.clear()
+        if self.bulk_worker_thread is not None and self.bulk_worker_thread.is_alive():
+            self.bulk_status_label.config(text="Chiusura: salvataggio dei risultati in corso...")
+            self.root.after(100, self.on_closing)
+            return
+        if self.bulk_poll_after_id is not None:
+            self.root.after_cancel(self.bulk_poll_after_id)
+            self.bulk_poll_after_id = None
         if self.keyboard_listener:
             self.keyboard_listener.stop()
         self.root.destroy()
