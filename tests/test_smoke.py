@@ -1,204 +1,269 @@
-r"""Run with: .venv\Scripts\python.exe -m unittest discover -s tests"""
-
-import asyncio
-import json
+"""Small GUI lifecycle test; physical mouse and listeners are never started."""
 from pathlib import Path
 import tempfile
 import tkinter as tk
-from tkinter import ttk
 import unittest
-from unittest.mock import AsyncMock, patch
-
-from openpyxl import load_workbook
-
-from game_engine import GameEngine
-from gratta_e_vinci_gui import GrattaEVinciGUI
-from settings_manager import SettingsManager
+from types import SimpleNamespace
+from unittest.mock import patch
+from client_store import ClientStore
+from coordinate_manager import CoordinateRecorder
+from gratta_e_vinci_gui import BalanceDialog, GrattaEVinciGUI
+from tests.test_lan_system import calibration
 
 
 class SmokeTest(unittest.TestCase):
-    def test_gui_simulation_and_monitor_lifecycle(self):
+    def test_pairing_guidance_and_initial_balance_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = tk.Tk()
+            root.withdraw()
+            with patch("pyautogui.click", side_effect=AssertionError("Real click")), \
+                 patch("pyautogui.moveTo", side_effect=AssertionError("Real mouse movement")), \
+                 patch("pyautogui.position", return_value=(100, 120)):
+                app = GrattaEVinciGUI(root, ClientStore(Path(directory) / "client.sqlite3"), start_services=False)
+                try:
+                    self.assertTrue(app.ready_button.instate(["disabled"]))
+                    self.assertTrue(app.address_button.instate(["disabled"]))
+                    app.profile_confirmed.set(True)
+                    app.fields["name"].set("Nome modificato")
+                    app.save_profile()
+                    self.assertTrue(app.profile_confirmed.get())
+                    app.pair()
+                    self.assertIsNone(app.pair_thread)
+                    self.assertIn("Genera codice monouso", app.error_var.get())
+                    app.pair_code.insert(0, "copied-code")
+                    with patch("gratta_e_vinci_gui.BalanceDialog", return_value=SimpleNamespace(result=None)):
+                        app.pair()
+                    self.assertIsNone(app.pair_thread)
+                    async def fake_associate(store, code):
+                        self.assertEqual(code, "copied-code")
+                        self.assertEqual(store.snapshot()["balance"], 19750)
+                        store.update(connection={"url": "https://master.test:8766"})
+                    with patch("gratta_e_vinci_gui.BalanceDialog", return_value=SimpleNamespace(result={"balance": 19750, "reason": "Saldo verificato sul gioco"})), \
+                         patch("gratta_e_vinci_gui.associate", side_effect=fake_associate) as pair:
+                        app.pair()
+                        app.pair_thread.join(timeout=2)
+                        self.assertFalse(app.pair_thread.is_alive())
+                        pair.assert_awaited_once()
+                    app._render_status()
+                    self.assertTrue(app.ready_button.instate(["!disabled"]))
+                    self.assertTrue(app.address_button.instate(["!disabled"]))
+                    self.assertTrue(app.pair_button.instate(["disabled"]))
+                    self.assertFalse(app.client.armed.is_set())
+                    self.assertTrue(app.store.snapshot()["confirmed"])
+                    app.unpair()
+                    self.assertTrue(app.store.snapshot()["unpair_requested"])
+                    self.assertEqual(app.store.snapshot()["commands"][0]["action"], "unpair")
+                    self.assertFalse(app.store.finish_unpair())
+                    app._render_status()
+                    self.assertTrue(app.ready_button.instate(["disabled"]))
+                    self.assertTrue(app.unpair_button.instate(["disabled"]))
+                finally:
+                    app.on_closing()
+
+    def create_app(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
         root = tk.Tk()
         root.withdraw()
-        self.addCleanup(lambda: root.destroy() if root.tk.call('info', 'commands', '.') else None)
-        callback_errors = []
-        root.report_callback_exception = lambda *error: callback_errors.append(error)
-        defaults = SettingsManager().merge_with_defaults({})
-        with patch('pyautogui.click', side_effect=AssertionError('Unexpected real click')), \
-             patch('pyautogui.moveTo', side_effect=AssertionError('Unexpected mouse move')), \
-             patch('pyautogui.position', return_value=(123, 456)) as position, \
-             patch.object(SettingsManager, 'load_settings', return_value=defaults):
-            app = GrattaEVinciGUI(root)
-            self.assertEqual(app.get_win_multiplier('medium', 4), 3.2)
-            self.assertEqual(app.get_win_multiplier('medium', 6), 6.8)
-            self.assertEqual(app.get_win_multiplier('medium', 7), 10.0)
-            self.assertEqual(app.get_win_multiplier('medium', 8), 15.0)
-            self.assertEqual(int(app.max_picks_spinbox.cget('to')), 8)
-            for panel in app.bulk_laptops:
-                self.assertIn('8', panel.game_controls[1].cget('values'))
-            previous_mode, previous_custom = app.mode_var.get(), app.custom_mode
-            app.mode_var.set('custom')
-            app.custom_mode = [{'b': .1, 'p': 8, 'd': 'medium'}]
-            self.assertTrue(app.game_engine.validate_settings())
-            self.assertEqual(app.game_engine._build_bulk_snapshot()['win_multipliers']['medium'][8], 15.0)
-            round_config = app.game_engine._get_round_config_for_strategy()
-            self.assertEqual((round_config['max_picks'], round_config['mine_count'], round_config['multiplier']),
-                             (8, 6, 15.0))
-            app.custom_mode = [{'b': .1, 'p': 8, 'd': 'low'}]
-            with self.assertRaises(ValueError):
-                app.game_engine.validate_settings()
-            app.mode_var.set(previous_mode)
-            app.custom_mode = previous_custom
-            # Loading older settings keeps the new confirmed medium quotes.
-            old_payload = app._collect_settings_payload()
-            for picks in (5, 6, 7, 8):
-                del old_payload['bulk_game_rules']['win_multipliers']['medium'][picks]
-            app._apply_settings_payload(old_payload)
-            self.assertEqual(app.bulk_win_multiplier_vars['medium'][6].get(), 6.8)
-            self.assertEqual(app.bulk_win_multiplier_vars['medium'][7].get(), 10.0)
-            self.assertEqual(app.bulk_win_multiplier_vars['medium'][8].get(), 15.0)
-            notebook = next(widget for widget in root.winfo_children() if isinstance(widget, ttk.Notebook))
-            self.assertEqual([notebook.tab(tab, 'text') for tab in notebook.tabs()],
-                             ['Settings', 'Bulk Test', 'Coordinates', 'Betting Modes', 'Inizializzazione',
-                              'Game Control', 'Statistics', 'Pause'])
-            settings = notebook.nametowidget(notebook.tabs()[1])
-            for widget in (app.bulk_start_button, app.bulk_stop_button, app.bulk_log_text,
-                           app.bulk_n_runs_entry, app.bulk_export_button):
-                self.assertTrue(str(widget).startswith(str(settings) + '.'))
-            root.after(250, root.quit)
-            root.mainloop()
-            self.assertGreaterEqual(position.call_count, 2)
-            self.assertIn('123, 456', app.coord_label.cget('text'))
+        for method in ("click", "moveTo"):
+            guard = patch("pyautogui." + method, side_effect=AssertionError("Real mouse action"))
+            guard.start()
+            self.addCleanup(guard.stop)
+        position = patch("pyautogui.position", return_value=(100, 120))
+        position.start()
+        self.addCleanup(position.stop)
+        app = GrattaEVinciGUI(root, ClientStore(Path(directory.name) / "client.sqlite3"), start_services=False)
+        self.addCleanup(app.on_closing)
+        return app
 
-            app.max_rounds_var.set(3)
-            app.game_running = True
-            app.running_event.set()
-            app.game_engine.initialize_game_variables()
-            app.game_engine.run_test_mode()
-            root.update()
-            self.assertEqual(app.rounds, 3)
-            self.assertFalse(app.game_running)
-            self.assertIn('Reached maximum rounds', app.progress_label.cget('text'))
+    def test_balance_dialog_accepts_actual_amount_and_never_defaults_to_loss(self):
+        app = self.create_app()
+        state = app.store.snapshot()
+        state.update(balance=19680, master_round={"id": "opened", "status": "uncertain"})
+        with patch("tkinter.simpledialog.Dialog.__init__", return_value=None):
+            dialog = BalanceDialog(app.root, state)
+        holder = tk.Frame(app.root)
+        dialog.body(holder)
+        self.assertEqual(dialog.amount_var.get(), "")
+        dialog.amount_var.set("1,999.91")
+        self.assertTrue(dialog.validate())
+        self.assertEqual(dialog.result, {"balance": 1999910, "reason": "Saldo verificato sul gioco", "outcome": "unknown"})
+        dialog.outcome_var.set("Vinta e incassata")
+        self.assertTrue(dialog.validate())
+        self.assertEqual(dialog.result["outcome"], "win")
+        dialog.amount_var.set("non un importo")
+        with patch("gratta_e_vinci_gui.messagebox.showerror") as error:
+            self.assertFalse(dialog.validate())
+        error.assert_called_once()
 
-            app.starting_cash_var.set(100)
-            app.target_win_var.set(101)
-            app.max_loss_var.set(5)
-            app.max_rounds_var.set(20)
-            app.max_picks_var.set(1)
-            app.bulk_betting_modes['normal'] = [1.0]
-            for variable in app.bulk_mine_config_vars.values():
-                variable.set(0)
-            results = app.game_engine.run_bulk_test(3, lambda *_: None, lambda _: None,
-                                                    lambda: False, lambda: False)
-            config = results['configurations'][0]
-            self.assertEqual(config['summary']['completed_runs'], 3)
-            self.assertEqual(config['success_counts'], [[3]])
-            with tempfile.TemporaryDirectory() as directory:
-                path = Path(directory) / 'results.xlsx'
-                app._write_excel(path, results)
-                workbook = load_workbook(path)
-                self.assertEqual(workbook.sheetnames, ['Confronto laptop', 'Griglia Win Rate', 'Impostazioni', 'Sommario',
-                                                     'Confronto', 'Dettaglio simulazioni', 'Distribuzione profitti'])
-                self.assertEqual(workbook['Griglia Win Rate']['B6'].value, 100)
-                workbook.close()
+    def test_euro_fields_and_balance_confirmation_wait_for_master(self):
+        app = self.create_app()
+        self.assertEqual(app.fields["stake"].get(), "0,10")
+        self.assertIn("0,00 €", app.balance_var.get())
 
-                # Exercise three independent panels, worker, plain JSON and Excel.
-                app.bulk_output_dir_var.set(directory)
-                app.bulk_n_runs_var.set(2)
-                self.assertEqual(len(app.bulk_laptops), 3)
-                for index, panel in enumerate(app.bulk_laptops, 1):
-                    panel.values['mode'].set('normal')
-                    panel.values['difficulty'].set('low')
-                    panel.values['max_picks'].set('1')
-                    panel.values['starting_cash'].set('100')
-                    panel.values['target_profit'].set(str(index))
-                    panel.values['max_loss'].set('10')
-                    panel.values['max_rounds'].set('20')
-                    panel.values['grinding_enabled'].set(False)
-                    panel.mode_sequences['normal'] = [1.0]
-                app.bulk_win_multiplier_vars['low'][1].set(2.0)
-                # Editing laptop 1 must not change laptop 2's own sequence.
-                app.bulk_laptops[0].mode_sequences['normal'].append(2.0)
-                self.assertEqual(app.bulk_laptops[1].mode_sequences['normal'], [1.0])
-                self.assertEqual([p.snapshot()['label'] for p in app.bulk_laptops], ['Laptop 1', 'Laptop 2', 'Laptop 3'])
-                self.assertFalse(hasattr(app, 'bulk_seed_var'))
-                self.assertFalse(hasattr(app, 'bulk_compare_var'))
-                payload = app._collect_settings_payload()
-                self.assertEqual(len(payload['bulk_laptops']), 3)
-                app.bulk_laptops[0].values['target_profit'].set('99')
-                app._apply_settings_payload(payload)
-                self.assertEqual(float(app.bulk_laptops[0].values['target_profit'].get()), 1)
-                timeout = root.after(10000, root.quit)
-                def await_completion():
-                    if app.bulk_test_running:
-                        root.after(20, await_completion)
-                    else:
-                        root.quit()
-                with patch.object(app, '_show_bulk_grid_popup') as show_results, \
-                     patch('gratta_e_vinci_gui.messagebox.showerror') as show_error:
-                    app.start_bulk_test()
-                    root.after(20, await_completion)
-                    root.mainloop()
-                    root.after_cancel(timeout)
-                    self.assertFalse(app.bulk_test_running)
-                    show_error.assert_not_called()
-                    show_results.assert_called_once()
-                self.assertEqual(len(app._bulk_results['configurations']), 3)
-                self.assertEqual([c['summary']['total_profit'] for c in app._bulk_results['configurations']], [2, 4, 6])
-                self.assertEqual(app.bulk_progress_var.get(), 100)
-                snapshots = list(Path(directory).glob('bulk_test_*.json'))
-                self.assertEqual(len(snapshots), 1)
-                self.assertTrue(snapshots[0].with_suffix('.xlsx').exists())
-                self.assertEqual(list(Path(directory).glob('*.sqlite')), [])
-                saved = json.loads(snapshots[0].read_text(encoding='utf-8'))
-                self.assertEqual(saved['status'], 'completed')
-                self.assertNotIn('seed', json.dumps(saved))
-                with patch('tkinter.filedialog.askopenfilename', return_value=str(snapshots[0])), \
-                     patch.object(app, '_show_bulk_grid_popup') as show_loaded:
-                    app.load_bulk_results()
-                    show_loaded.assert_called_once()
-                self.assertEqual(app._bulk_results, saved)
-                app._show_bulk_grid_popup(saved)
-                root.update_idletasks()
-                popup = next(w for w in root.winfo_children() if isinstance(w, tk.Toplevel))
-                tabs = next(w for w in popup.winfo_children() if isinstance(w, ttk.Notebook))
-                self.assertEqual(tabs.tab(tabs.tabs()[0], 'text'), 'Confronto laptop')
-                self.assertEqual(len(tabs.tabs()), 2)
-                popup.destroy()
+    def test_reset_waits_for_master_before_clearing_display(self):
+        app = self.create_app()
+        app.store.update(balance=1999910, confirmed=True, connection={"url": "https://master.test:8766"})
+        app.profile_confirmed.set(True)
+        app.last_reply = {"session": {"status": "active", "progress": 3000}, "device": {"last_result": {"outcome": "win"}}}
+        app._render_status()
+        self.assertIn("3,00 €", app.session_var.get())
+        with patch("gratta_e_vinci_gui.messagebox.askyesno", return_value=True), \
+             patch.object(app.client, "reset_local", return_value=None, create=True):
+            app.reset_local()
+        self.assertEqual(app.store.snapshot()["balance"], 1999910)
+        self.assertTrue(app.profile_confirmed.get())
+        self.assertIn("attendo la dissociazione", app.balance_sync_var.get())
+        app.store.update(balance=0, confirmed=False, connection=None, config=app.store.snapshot()["config"])
+        app.ui_queue.put(("reset", Path("archivio.sqlite3")))
+        app._poll()
+        self.assertIsNone(app.last_reply)
+        self.assertFalse(app.profile_confirmed.get())
+        self.assertIn("0,00 €", app.balance_var.get())
+        self.assertEqual(app.session_var.get(), "Nessuna sessione")
+        app.store.update(balance=19680, confirmed=True, connection={"url": "https://master.test:8766"})
+        with patch("gratta_e_vinci_gui.BalanceDialog", return_value=SimpleNamespace(result={"balance": 1999910, "reason": "Saldo verificato sul gioco"})):
+            app.correct_balance()
+        self.assertEqual(app.store.snapshot()["balance"], 19680)
+        self.assertIn("attendo la conferma", app.balance_sync_var.get())
+        state = app.store.snapshot()
+        command = state["commands"][-1]
+        self.assertEqual(command["action"], "balance")
+        self.assertEqual(command["payload"]["balance"], 1999910)
+        reply = {"ack": 0, "command_id": command["id"], "session": None,
+                 "device": {"balance": 1999910, "config": state["config"], "revision": 1, "error": "", "round": None}}
+        app.store.reply(reply)
+        app.ui_queue.put(("reply", reply))
+        app._poll()
+        self.assertIn("confermato dal master: 1.999,91 €", app.balance_sync_var.get())
+        self.assertIn("1.999,91 €", app.balance_var.get())
+        with patch("gratta_e_vinci_gui.BalanceDialog", return_value=SimpleNamespace(result={"balance": 2000000, "reason": "Nuova verifica"})):
+            app.correct_balance()
+        reply.update(command_id=app.balance_command_id, command_error="Partita ancora in corso")
+        app.store.reply(reply)
+        app.ui_queue.put(("reply", reply))
+        app._poll()
+        self.assertIn("rifiutata dal master: Partita ancora in corso", app.balance_sync_var.get())
+        self.assertEqual(app.store.snapshot()["balance"], 1999910)
 
-                app.show_tile_analysis()
-                root.update_idletasks()
-                analysis = next(w for w in root.winfo_children() if isinstance(w, tk.Toplevel))
-                self.assertIn('Analisi', analysis.title())
-                analysis.destroy()
-                app.tile_record_enabled_var.set(False)
-                app.tile_use_history_var.set(True)
-                app._update_tile_controls()
-                self.assertFalse(app.tile_use_history_var.get())
-                self.assertIn('disabled', app.tile_history_check.state())
-                app.tile_record_enabled_var.set(True)
-                app._update_tile_controls()
-                self.assertNotIn('disabled', app.tile_history_check.state())
+    def test_balance_with_unknown_round_queues_reconciliation_and_reset_is_explicit(self):
+        app = self.create_app()
+        app.store.update(confirmed=True, connection={"url": "https://master.test:8766"},
+                         master_round={"id": "opened", "status": "uncertain"})
+        with patch("gratta_e_vinci_gui.BalanceDialog", return_value=SimpleNamespace(result={"balance": 1999910, "reason": "Saldo verificato sul gioco", "outcome": "unknown"})):
+            app.correct_balance()
+        command = app.store.snapshot()["commands"][-1]
+        self.assertEqual(command["action"], "reconcile")
+        self.assertEqual(command["payload"]["outcome"], "unknown")
+        with patch("gratta_e_vinci_gui.messagebox.askyesno", return_value=False), \
+             patch.object(app.client, "reset_local", create=True) as reset:
+            app.reset_local()
+            reset.assert_not_called()
+        def reset_data():
+            app.store.update(balance=0, confirmed=False, connection=None, master_round=None, commands=[])
+            return Path("archivio.sqlite3")
+        app.profile_confirmed.set(True)
+        with patch("gratta_e_vinci_gui.messagebox.askyesno", return_value=True), \
+             patch.object(app.client, "reset_local", side_effect=reset_data, create=True) as reset:
+            app.reset_local()
+            reset.assert_called_once()
+        self.assertFalse(app.store.snapshot()["confirmed"])
+        self.assertFalse(app.profile_confirmed.get())
+        self.assertIsNone(app.balance_command_id)
+        self.assertIn("0,00 €", app.balance_var.get())
 
-            root.after_cancel(app.mouse_monitor_after_id)
-            position.side_effect = RuntimeError('Position unavailable')
-            app.start_mouse_monitoring()
-            root.update()
-            self.assertIsNone(app.mouse_monitor_after_id)
-            self.assertIn('Position unavailable', app.status_text.get('1.0', 'end'))
-            position.side_effect = None
-            app.start_mouse_monitoring()
-            timer = app.mouse_monitor_after_id
-            with patch.object(root, 'after_cancel', wraps=root.after_cancel) as cancel:
-                app.on_closing()
-                cancel.assert_called_once_with(timer)
-            self.assertFalse(app.running_event.is_set())
-            self.assertEqual(callback_errors, [])
+    def test_light_client_gui_and_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = tk.Tk()
+            root.withdraw()
+            errors = []
+            root.report_callback_exception = lambda *args: errors.append(args)
+            with patch("pyautogui.click", side_effect=AssertionError("Real click")), \
+                 patch("pyautogui.moveTo", side_effect=AssertionError("Real mouse movement")), \
+                 patch("pyautogui.position", return_value=(100, 120)):
+                app = GrattaEVinciGUI(root, ClientStore(Path(directory) / "client.sqlite3"), start_services=False)
+                self.assertEqual([app.notebook.tab(t, "text") for t in app.notebook.tabs()],
+                                 ["Stato", "Calibrazione", "Cambio/reset puntata", "Tempi"])
+                self.assertFalse(hasattr(app, "bulk_laptops"))
+                app.store.update(calibration=calibration())
+                app.load_calibration()
+                app.step_type.set("Attendi")
+                app.step_seconds.set("0,5")
+                app.add_step()
+                with patch("pyautogui.size", return_value=(100, 100)):
+                    app.save_advanced()
+                self.assertEqual(app.store.snapshot()["calibration"]["steps"][-1], {"action": "wait", "seconds": 0.5})
+                app.step_list.append({"action": "wait", "seconds": 2})
+                self.assertEqual(len(app.store.snapshot()["calibration"]["steps"]), 3)
+                app.arm()
+                self.assertFalse(app.client.armed.is_set())
+                root.after(150, app.on_closing)
+                root.mainloop()
+            self.assertFalse(errors)
 
-    def test_async_runner(self):
-        engine = GameEngine(None, None)
-        with patch.object(engine, 'main_game_loop', new_callable=AsyncMock) as loop:
-            engine.run_game_async()
-            loop.assert_awaited_once()
-        with self.assertRaises(RuntimeError):
-            asyncio.get_running_loop()
+    def test_difficulty_coordinates_recorder_and_calibration_save(self):
+        app = self.create_app()
+        app.store.update(calibration=calibration())
+        app.load_calibration()
+        recorder = CoordinateRecorder(app)
+        steps = {step["var_key"]: index for index, step in enumerate(recorder.steps) if isinstance(step["var_key"], tuple)}
+        self.assertEqual(len(recorder.steps), 14)
+        recorder.recorded[steps[("difficulty_lower_x_var", "difficulty_lower_y_var")]] = (82, 80)
+        recorder.recorded[steps[("difficulty_raise_x_var", "difficulty_raise_y_var")]] = (83, 80)
+        recorder._save_and_close()
+        self.assertEqual((app.difficulty_lower_x_var.get(), app.difficulty_lower_y_var.get()), (82, 80))
+        self.assertEqual((app.difficulty_raise_x_var.get(), app.difficulty_raise_y_var.get()), (83, 80))
+        with patch("pyautogui.size", return_value=(100, 100)):
+            app.save_calibration()
+        self.assertEqual(app.error_var.get(), "")
+        saved = app.store.snapshot()["calibration"]
+        self.assertEqual(saved["difficulty_lower"], [82, 80])
+        self.assertEqual(saved["difficulty_raise"], [83, 80])
+
+    def test_timing_fields_are_explicit_independent_and_scrollable(self):
+        app = self.create_app()
+        app.store.update(calibration=calibration())
+        app.load_calibration()
+        self.assertEqual(set(app.delay_vars), set(app.store.snapshot()["calibration"]["delays"]))
+        before = app.store.snapshot()["calibration"]["delays"]
+        app.delay_vars["play"].set("0,7")
+        app.delay_vars["collect"].set("0,8")
+        app.delay_vars["tile"].set("0,9")
+        app.delay_vars["second_tile"].set("1,1")
+        app.delay_vars["after_click"].set("0,05")
+        with patch("pyautogui.size", return_value=(100, 100)):
+            app.save_advanced("timing")
+        self.assertEqual(app.error_var.get(), "")
+        saved = app.store.snapshot()["calibration"]["delays"]
+        self.assertEqual([saved[k] for k in ("play", "collect", "tile", "second_tile", "after_click")], [0.7, 0.8, 0.9, 1.1, 0.05])
+        self.assertEqual(saved["after_tile"], before["after_tile"])
+        self.assertEqual(saved["after_second_tile"], before["after_second_tile"])
+        self.assertIn("somma", app.delay_hints["after_click"])
+        self.assertIn("Prima seconda cella", app.delay_hints["second_tile"])
+        app.delay_entries["second_tile"].event_generate("<FocusIn>")
+        app.root.update_idletasks()
+        self.assertEqual(app.timing_help_var.get(), app.delay_hints["second_tile"])
+        app.notebook.select(app.tabs[3])
+        with patch.object(app.timing_canvas, "yview_scroll") as scroll:
+            app._timing_scroll(SimpleNamespace(delta=-120))
+        scroll.assert_called_once_with(1, "units")
+        self.assertEqual(set(app.scroll_canvases), {str(tab) for tab in app.tabs})
+        entry = app.delay_entries["between"]
+        with patch.object(app.timing_canvas, "bbox", return_value=(0, 0, 800, 1500)), \
+             patch.object(app.timing_canvas, "winfo_height", return_value=300), \
+             patch.object(app.timing_canvas, "winfo_rooty", return_value=0), \
+             patch.object(app.timing_canvas, "canvasy", side_effect=lambda y: y + 500), \
+             patch.object(app.timing_canvas, "yview_moveto") as reveal, \
+             patch.object(entry, "winfo_height", return_value=20), \
+             patch.object(entry, "winfo_rooty", return_value=-20) as position:
+            app._scroll_focus(SimpleNamespace(widget=entry))
+            reveal.assert_called_once_with(480 / 1500)
+            reveal.reset_mock()
+            position.return_value = 400
+            app._scroll_focus(SimpleNamespace(widget=entry))
+            reveal.assert_called_once_with(620 / 1500)
+        self.assertFalse(app.client.armed.is_set())
+
+
+if __name__ == "__main__":
+    unittest.main()

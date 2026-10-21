@@ -65,20 +65,20 @@ class CoordinateRecorder:
 
     def _build_steps(self):
         return [
-            {"label": "Tile 1", "type": "xy", "var_key": 1},
-            {"label": "Tile 2", "type": "x_only", "var_key": 2},
-            {"label": "Tile 3", "type": "x_only", "var_key": 3},
-            {"label": "Tile 4", "type": "x_only", "var_key": 4},
-            {"label": "Tile 5", "type": "x_only", "var_key": 5},
-            {"label": "Tile 6", "type": "y_only", "var_key": 6},
-            {"label": "Tile 11", "type": "y_only", "var_key": 11},
-            {"label": "Tile 16", "type": "y_only", "var_key": 16},
-            {"label": "Tile 21", "type": "y_only", "var_key": 21},
-            {"label": "Play/Collect Button", "type": "xy", "var_key": ("play_x_var", "play_y_var")},
-            {"label": "Raise Bet Button", "type": "xy", "var_key": ("raise_x_var", "raise_y_var")},
-            {"label": "Lower Bet Button", "type": "xy", "var_key": ("lower_x_var", "lower_y_var")},
-            {"label": "Raise Difficulty Button", "type": "xy", "var_key": ("raise_diff_x_var", "raise_diff_y_var")},
-            {"label": "Lower Difficulty Button", "type": "xy", "var_key": ("lower_diff_x_var", "lower_diff_y_var")},
+            {"label": "Cella 1", "type": "xy", "var_key": 1},
+            {"label": "Cella 2", "type": "x_only", "var_key": 2},
+            {"label": "Cella 3", "type": "x_only", "var_key": 3},
+            {"label": "Cella 4", "type": "x_only", "var_key": 4},
+            {"label": "Cella 5", "type": "x_only", "var_key": 5},
+            {"label": "Cella 6", "type": "y_only", "var_key": 6},
+            {"label": "Cella 11", "type": "y_only", "var_key": 11},
+            {"label": "Cella 16", "type": "y_only", "var_key": 16},
+            {"label": "Cella 21", "type": "y_only", "var_key": 21},
+            {"label": "Gioca / incassa", "type": "xy", "var_key": ("play_x_var", "play_y_var")},
+            {"label": "Alza puntata", "type": "xy", "var_key": ("raise_x_var", "raise_y_var")},
+            {"label": "Abbassa puntata", "type": "xy", "var_key": ("lower_x_var", "lower_y_var")},
+            {"label": "Abbassa difficoltà", "type": "xy", "var_key": ("difficulty_lower_x_var", "difficulty_lower_y_var")},
+            {"label": "Alza difficoltà", "type": "xy", "var_key": ("difficulty_raise_x_var", "difficulty_raise_y_var")},
         ]
 
     def start(self):
@@ -139,12 +139,13 @@ class CoordinateRecorder:
         right_button_down = getattr(mouse.Listener, "WM_RBUTTONDOWN", None)
         right_button_up = getattr(mouse.Listener, "WM_RBUTTONUP", None)
         if msg == left_button_down:
-            self.app.root.after(0, lambda: self._record_and_advance(data.pt.x, data.pt.y))
+            x, y = data.pt.x, data.pt.y
+            self.app.ui_queue.put(("callback", lambda: self._record_and_advance(x, y)))
             self.mouse_listener.suppress_event()
         elif msg == left_button_up:
             self.mouse_listener.suppress_event()
         elif msg == right_button_down:
-            self.app.root.after(0, self._go_back)
+            self.app.ui_queue.put(("callback", self._go_back))
             self.mouse_listener.suppress_event()
         elif msg == right_button_up:
             self.mouse_listener.suppress_event()
@@ -175,21 +176,21 @@ class CoordinateRecorder:
         if not pressed or self._closed:
             return
         if button == mouse.Button.left:
-            self.app.root.after(0, lambda: self._record_and_advance(x, y))
+            self.app.ui_queue.put(("callback", lambda: self._record_and_advance(x, y)))
         elif button == mouse.Button.right:
-            self.app.root.after(0, self._go_back)
+            self.app.ui_queue.put(("callback", self._go_back))
 
     def _on_key(self, key):
         if self._closed:
             return
         if key == keyboard.Key.esc:
-            self.app.root.after(0, self._cancel)
+            self.app.ui_queue.put(("callback", self._cancel))
         elif key == keyboard.Key.enter:
-            self.app.root.after(0, self._save_and_close)
+            self.app.ui_queue.put(("callback", self._save_and_close))
         elif key == keyboard.Key.left:
-            self.app.root.after(0, lambda: self._navigate(-1))
+            self.app.ui_queue.put(("callback", lambda: self._navigate(-1)))
         elif key == keyboard.Key.right:
-            self.app.root.after(0, lambda: self._navigate(1))
+            self.app.ui_queue.put(("callback", lambda: self._navigate(1)))
 
     def _record_and_advance(self, x, y):
         if self._closed:
